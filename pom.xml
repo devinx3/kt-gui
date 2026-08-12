@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>devinx3.github.io</groupId>
+    <artifactId>kt-gui</artifactId>
+    <version>0.1</version>
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <javafx.version>21</javafx.version>
+		<appModule>io.github.devinx3.kt</appModule>
+		<appMainClass>io.github.devinx3.kt.Launcher</appMainClass>
+    </properties>
+
+    <dependencies>
+        <!-- JavaFX 核心依赖 -->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>${javafx.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+		<!-- mvn clean package javafx:jlink jpackage:jpackage -->
+        <plugins>		
+		<plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <version>3.8.1</version>
+            <configuration>
+                <source>17</source>
+                <target>17</target>
+                <encoding>UTF-8</encoding>
+            </configuration>
+        </plugin>
+		<plugin>
+			<groupId>org.openjfx</groupId>
+			<artifactId>javafx-maven-plugin</artifactId>
+			<version>0.0.8</version>
+			<configuration>
+				<mainClass>${appModule}/${appMainClass}</mainClass>
+			</configuration>
+		</plugin>
+         <plugin>
+            <groupId>org.panteleyev</groupId>
+            <artifactId>jpackage-maven-plugin</artifactId>
+            <version>1.7.1</version>
+            <configuration>
+                <name>kt-gui</name>
+                <appVersion>${project.version}</appVersion>
+                <vendor>devinx3</vendor>
+                <module>${appModule}/${appMainClass}</module>
+                <runtimeImage>${project.build.directory}/image</runtimeImage>
+                <destination>${project.build.directory}/app</destination>
+				<type>APP_IMAGE</type>
+				<icon>${project.basedir}/public/favicon.ico</icon>
+            </configuration>
+        </plugin>
+        </plugins>
+    </build>
+</project>
