@@ -23,6 +23,9 @@ import java.util.function.Consumer;
  */
 public class CommandRunner {
 
+    // STATUS_CONTROL_C_EXIT = 0xC000013A：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
+    private static final int STATUS_CONTROL_C_EXIT = -1073741510;
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private volatile Process currentProcess;  // 当前正在执行的进程，供"终止"按钮使用
@@ -138,6 +141,10 @@ public class CommandRunner {
                         }
                         if (target != null) {
                             ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 命令完成，退出码: " + exitCode, false));
+                            // 0xC000013A = STATUS_CONTROL_C_EXIT：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
+                            if (exitCode == STATUS_CONTROL_C_EXIT) {
+                                ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 已通过 Ctrl+C 正常终止", false));
+                            }
                             if (permissionIssue) {
                                 // 权限不足：ktctl 需要管理员权限（修改 hosts、创建虚拟网卡等）
                                 ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 权限不足：请以管理员身份运行本程序后重试。", true));
@@ -164,15 +171,22 @@ public class CommandRunner {
     }
 
     /**
-     * 终止当前正在执行的进程：发送 Ctrl+C 信号（等效终止），超时未退出则强制终止。
-     * 面板负责在此前后输出提示信息与联动（如清除连接成功底色）。
+     * 终止当前正在执行的进程：仅 connect 命令发送真正的 Ctrl+C（Windows），其余命令（clean 等）直接 destroy；
+     * 超时未退出则强制终止。面板负责在此前后输出提示信息与联动（如清除连接成功底色）。
      */
     public void terminateCurrent() {
         Process p = currentProcess;
         if (p == null) {
             return;
         }
-        p.destroy();
+        // 仅 connect 命令需要优雅断开（发送真正的 Ctrl+C）；clean 等其余命令直接终止即可
+        if ("connect".equals(currentCommand)) {
+            if (!CtrlC.send(p)) {
+                p.destroy();
+            }
+        } else {
+            p.destroy();
+        }
         executor.submit(() -> {
             try {
                 if (!p.waitFor(3, TimeUnit.SECONDS)) {

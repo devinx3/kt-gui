@@ -79,10 +79,10 @@ public class ConnectPanel implements MenuPanel {
     }
 
     /**
-     * connect 输出出现成功提示时：按钮变绿（由 CommandRunner 在 UI 线程回调）
+     * connect 输出出现成功提示时：按钮变为绿色加粗字体（由 CommandRunner 在 UI 线程回调）
      */
     private void markConnected() {
-        btn.setStyle("-fx-background-color: #d4edda;");
+        btn.setStyle("-fx-text-fill: #28a745; -fx-font-weight: bold;");
         connectedOk = true;
     }
 

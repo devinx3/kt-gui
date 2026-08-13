@@ -59,7 +59,7 @@ public class CleanPanel implements MenuPanel {
             cleanArea.append(Ui.timestamp() + " 当前没有正在运行的命令", false);
             return;
         }
-        cleanArea.append(Ui.timestamp() + " 已发送终止信号 (Ctrl+C)", false);
+        cleanArea.append(Ui.timestamp() + " 已发送终止信号", false);
         runner.terminateCurrent();
     }
 }

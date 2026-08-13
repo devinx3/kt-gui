@@ -4,6 +4,8 @@
  */
 module io.github.devinx3.kt {
     requires javafx.controls;
+    requires com.sun.jna;
+    requires com.sun.jna.platform;
 
     exports io.github.devinx3.kt;
 

@@ -1,6 +1,7 @@
 package io.github.devinx3.kt.ui;
 
 import io.github.devinx3.kt.core.CommandRunner;
+import io.github.devinx3.kt.core.CtrlC;
 import io.github.devinx3.kt.core.ServiceStore;
 import javafx.application.Platform;
 import javafx.scene.Node;
@@ -32,7 +33,10 @@ import java.util.function.Consumer;
  */
 public class MeshRecoverPanel implements MenuPanel {
 
-    private final ToggleButton btn = new ToggleButton("Mesh/Recover");
+    // STATUS_CONTROL_C_EXIT = 0xC000013A：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
+    private static final int STATUS_CONTROL_C_EXIT = -1073741510;
+
+    private final ToggleButton btn = new ToggleButton("Mesh");
     private final VBox meshRecoverServiceBox = new VBox(5);   // 面板左侧服务列表
     private final Label mrConsoleTitle = new Label("请选择服务");  // 右侧控制台标题（显示当前服务名）
     private final StackPane mrConsoleArea = new StackPane();       // 右侧控制台容器
@@ -42,10 +46,12 @@ public class MeshRecoverPanel implements MenuPanel {
 
     private final Map<String, Process> serviceProcesses = new ConcurrentHashMap<>();  // 服务名 → 命令进程
     private final Map<String, String> serviceCommands = new ConcurrentHashMap<>();   // 服务名 → 当前执行的命令（mesh/recover）
-    private final Map<String, HBox> serviceRows = new ConcurrentHashMap<>();         // 服务名 → 列表行（用于成功背景色）
-    private final Map<String, Button[]> serviceMeshButtons = new ConcurrentHashMap<>(); // 服务名 → [mesh, recover] 按钮（mesh 成功时同步浅绿）
+    private final Map<String, HBox> serviceRows = new ConcurrentHashMap<>();         // 服务名 → 列表行（用于成功时定位）
+    private final Map<String, Label> serviceNameLabels = new ConcurrentHashMap<>(); // 服务名 → 名称 Label（mesh 成功时绿色加粗）
+    private final Map<String, Button[]> serviceMeshButtons = new ConcurrentHashMap<>(); // 服务名 → [mesh, recover] 按钮（mesh 成功时禁用）
     private final Map<String, ConsoleArea> serviceConsoles = new ConcurrentHashMap<>(); // 服务名 → 独立控制台
-    private final Set<String> meshSuccessServices = ConcurrentHashMap.newKeySet();  // mesh 成功的服务（行背景浅绿）
+    private final Map<String, Thread[]> serviceReaderThreads = new ConcurrentHashMap<>(); // 服务名 → [stdout, stderr] 读取线程（stop 时等待剩余输出排空）
+    private final Set<String> meshSuccessServices = ConcurrentHashMap.newKeySet();  // mesh 成功的服务（服务名绿色加粗）
     private String selectedService;                      // 当前选中的服务
 
     public MeshRecoverPanel(ServiceStore store) {
@@ -83,6 +89,7 @@ public class MeshRecoverPanel implements MenuPanel {
         serviceRows.clear();
         serviceMeshButtons.clear();
         serviceConsoles.clear();
+        serviceReaderThreads.clear();
         for (Map.Entry<String, String> e : store.load().entrySet()) {
             final String service = e.getKey();
             final String port = e.getValue();
@@ -95,8 +102,10 @@ public class MeshRecoverPanel implements MenuPanel {
             // 服务行不展示端口（mesh 命令仍使用端口参数）；按钮组右对齐
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox row = new HBox(5, new Label(service), spacer, meshRunBtn, recoverRunBtn, stopRunBtn);
+            Label serviceName = new Label(service);
+            HBox row = new HBox(5, serviceName, spacer, meshRunBtn, recoverRunBtn, stopRunBtn);
             serviceRows.put(service, row);
+            serviceNameLabels.put(service, serviceName);
             serviceMeshButtons.put(service, new Button[]{meshRunBtn, recoverRunBtn});
             // 每个服务独立的控制台
             ConsoleArea console = new ConsoleArea();
@@ -105,10 +114,11 @@ public class MeshRecoverPanel implements MenuPanel {
             row.addEventFilter(MouseEvent.MOUSE_CLICKED, ev -> selectService(service));
             meshRecoverServiceBox.getChildren().add(row);
         }
-        // 列表重建后恢复 mesh 成功服务的浅绿底色
+        // 列表重建后恢复 mesh 成功服务的绿色加粗字体
         for (String s : meshSuccessServices) {
             updateServiceRowStyle(s);
         }
+        updateMenuButton();  // 同步顶部按钮的绿色加粗与个数
     }
 
     /**
@@ -149,24 +159,41 @@ public class MeshRecoverPanel implements MenuPanel {
     }
 
     /**
-     * 更新服务行样式：mesh 成功浅绿 > 默认（不再使用选中浅蓝）
+     * 更新服务行样式：mesh 成功后服务名绿色加粗，同时禁用该服务的 mesh/recover 按钮
      */
     private void updateServiceRowStyle(String service) {
         HBox row = serviceRows.get(service);
         if (row == null) {
             return;
         }
-        if (meshSuccessServices.contains(service)) {
-            row.setStyle("-fx-background-color: #d4edda;");  // mesh 成功浅绿
-        } else {
-            row.setStyle("");
+        boolean success = meshSuccessServices.contains(service);
+        row.setStyle("");
+        Label name = serviceNameLabels.get(service);
+        if (name != null) {
+            name.setStyle(success ? "-fx-text-fill: #28a745; -fx-font-weight: bold;" : "");
         }
-        // mesh/recover 按钮背景与行背景同步：mesh 成功时按钮同样为浅绿
+        // mesh 成功后仅禁用该服务的 mesh 按钮（recover 仍可点击）；未成功时恢复可用
         Button[] buttons = serviceMeshButtons.get(service);
         if (buttons != null) {
+            buttons[0].setDisable(success);  // [0] = mesh
+            buttons[1].setDisable(false);    // [1] = recover 不禁用
             for (Button b : buttons) {
-                b.setStyle(meshSuccessServices.contains(service) ? "-fx-background-color: #d4edda;" : "");
+                b.setStyle("");
             }
+        }
+    }
+
+    /**
+     * 更新顶部 Mesh/Recover 按钮：存在 mesh 成功的绿色服务时，按钮绿色加粗并显示服务个数
+     */
+    private void updateMenuButton() {
+        int count = meshSuccessServices.size();
+        if (count > 0) {
+            btn.setText("Mesh (" + count + ")");
+            btn.setStyle("-fx-text-fill: #28a745; -fx-font-weight: bold;");
+        } else {
+            btn.setText("Mesh");
+            btn.setStyle("");
         }
     }
 
@@ -204,23 +231,32 @@ public class MeshRecoverPanel implements MenuPanel {
                 serviceCommands.put(service, cmd);
                 String charsetName = System.getProperty("os.name").toLowerCase().contains("win") ? "GBK" : "UTF-8";
                 Platform.runLater(() -> serviceConsole(service).append(
-                        Ui.timestamp() + " > 执行: ktctl " + String.join(" ", command), false));
+                        Ui.timestamp() + " > 执行: " + String.join(" ", command), false));
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(process.getInputStream(), Charset.forName(charsetName)));
                      BufferedReader errorReader = new BufferedReader(
                              new InputStreamReader(process.getErrorStream(), Charset.forName(charsetName)))) {
-                    // mesh 命令成功（出现 "Now you can access your service by header"）时服务行变浅绿
+                    // mesh 命令成功（出现 "Now you can access your service by header"）时服务名变绿并禁用 mesh/recover 按钮
                     String keyword = "mesh".equals(cmd) ? "Now you can access your service by header" : null;
                     Consumer<String> onSuccess = "mesh".equals(cmd) ? line -> markMeshSuccess(service) : null;
                     Thread outT = new Thread(() -> CommandRunner.readOutput(reader, serviceConsole(service).getListView(), false, null, keyword, onSuccess));
                     Thread errT = new Thread(() -> CommandRunner.readOutput(errorReader, serviceConsole(service).getListView(), true, null, keyword, onSuccess));
+                    serviceReaderThreads.put(service, new Thread[]{outT, errT});
                     outT.start();
                     errT.start();
                     int exitCode = process.waitFor();
                     outT.join();
                     errT.join();
-                    Platform.runLater(() -> serviceConsole(service).append(
-                            Ui.timestamp() + " " + cmd + " " + service + " 结束，退出码: " + exitCode, exitCode != 0));
+                    Platform.runLater(() -> {
+                        // 0xC000013A = STATUS_CONTROL_C_EXIT：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
+                        if (exitCode == STATUS_CONTROL_C_EXIT) {
+                            serviceConsole(service).append(
+                                    Ui.timestamp() + " " + cmd + " " + service + " 已通过 Ctrl+C 正常终止", false);
+                        } else {
+                            serviceConsole(service).append(
+                                    Ui.timestamp() + " " + cmd + " " + service + " 结束，退出码: " + exitCode, exitCode != 0);
+                        }
+                    });
                 }
             } catch (Exception e) {
                 Platform.runLater(() -> serviceConsole(service).append(
@@ -228,6 +264,7 @@ public class MeshRecoverPanel implements MenuPanel {
             } finally {
                 serviceProcesses.remove(service);
                 serviceCommands.remove(service);
+                serviceReaderThreads.remove(service);
             }
         });
         t.setDaemon(true);
@@ -244,13 +281,29 @@ public class MeshRecoverPanel implements MenuPanel {
             return;
         }
         serviceConsole(service).append(Ui.timestamp() + " 已发送终止信号: " + service, false);
-        // 立即从运行表移除并清除 mesh 成功状态：迟到的成功回调不再变绿，行与按钮恢复默认色
+        // 立即从运行表移除并清除 mesh 成功状态：迟到的成功回调不再变绿，服务名与按钮恢复默认状态
         serviceProcesses.remove(service);
         meshSuccessServices.remove(service);
         updateServiceRowStyle(service);
-        p.destroy();
+        updateMenuButton();  // 顶部按钮恢复默认（无绿色服务时）
+        // 仅 mesh 命令需要优雅退出（发送真正的 Ctrl+C）；recover 直接终止即可
+        if ("mesh".equals(serviceCommands.get(service))) {
+            if (!CtrlC.send(p)) {
+                p.destroy();
+            }
+        } else {
+            p.destroy();
+        }
         Thread t = new Thread(() -> {
             try {
+                // 等待输出读取线程把进程已产生的剩余输出读完并打印（如 mesh/recover 的结束日志），
+                // 之后再强制终止兜底，避免 stop 后输出丢失
+                Thread[] readers = serviceReaderThreads.get(service);
+                if (readers != null) {
+                    for (Thread r : readers) {
+                        r.join(3000);
+                    }
+                }
                 if (!p.waitFor(3, TimeUnit.SECONDS)) {
                     p.destroyForcibly();
                 }
@@ -263,15 +316,16 @@ public class MeshRecoverPanel implements MenuPanel {
     }
 
     /**
-     * mesh 命令成功：服务行背景变为浅绿色
+     * mesh 命令成功：服务名变绿加粗，并禁用该服务的 mesh/recover 按钮
      */
     private void markMeshSuccess(String service) {
-        // 已 stop 的服务不再变绿：避免终止后迟到的成功输出（异步回调）把行与按钮重新上色
+        // 已 stop 的服务不再变绿：避免终止后迟到的成功输出（异步回调）把服务名与按钮重新上色
         if (!serviceProcesses.containsKey(service)) {
             return;
         }
         meshSuccessServices.add(service);
         updateServiceRowStyle(service);
+        updateMenuButton();  // 顶部按钮绿色加粗并显示个数
     }
 
     /**
