@@ -3,27 +3,12 @@
     xmlns="http://maven.apache.org/POM/4.0.0"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-    <groupId>devinx3.github.io</groupId>
-    <artifactId>kt-gui</artifactId>
-    <version>0.1</version>
+
     <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <javafx.version>21</javafx.version>
-        <appModule>io.github.devinx3.kt</appModule>
         <appMainClass>io.github.devinx3.kt.Launcher</appMainClass>
     </properties>
-    <dependencies>
-        <!-- JavaFX 核心依赖 -->
-        <dependency>
-            <groupId>org.openjfx</groupId>
-            <artifactId>javafx-controls</artifactId>
-            <version>${javafx.version}</version>
-        </dependency>
-    </dependencies>
     <build>
-        <!-- mvn clean package (no moule) -->
+        <!-- mvn clean package (no module) -->
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
