@@ -4,6 +4,8 @@ import io.github.devinx3.kt.core.CommandRunner;
 import io.github.devinx3.kt.core.CtrlC;
 import io.github.devinx3.kt.core.ServiceStore;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -66,8 +68,10 @@ public class MeshRecoverPanel implements MenuPanel {
         HBox.setHgrow(mrRight, Priority.ALWAYS);
         Button mrRefreshBtn = new Button("刷新");
         mrRefreshBtn.setOnAction(e -> refreshMeshRecoverList());
-        HBox mrTitle = new HBox(10, new Label("Mesh/Recover"), mrRefreshBtn);
-        pane.getChildren().addAll(mrTitle, mrBody);
+        HBox mrTitle = new HBox(10, new Label("Mesh/Recover"));
+        // 刷新按钮单独一行，保持在服务列表上方
+        HBox mrRefreshRow = new HBox(10, mrRefreshBtn);
+        pane.getChildren().addAll(mrTitle, mrRefreshRow, mrBody);
         VBox.setVgrow(mrBody, Priority.ALWAYS);
     }
 
@@ -104,6 +108,9 @@ public class MeshRecoverPanel implements MenuPanel {
             HBox.setHgrow(spacer, Priority.ALWAYS);
             Label serviceName = new Label(service);
             HBox row = new HBox(5, serviceName, spacer, meshRunBtn, recoverRunBtn, stopRunBtn);
+            // 服务行文字垂直居中，左侧留一点间距
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setPadding(new Insets(0, 0, 0, 6));
             serviceRows.put(service, row);
             serviceNameLabels.put(service, serviceName);
             serviceMeshButtons.put(service, new Button[]{meshRunBtn, recoverRunBtn});

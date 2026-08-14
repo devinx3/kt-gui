@@ -19,10 +19,10 @@ public final class Ui {
     }
 
     /**
-     * 当前时间戳，格式如 [08-11 17:30:05]
+     * 当前时间戳，格式如 [2025-08-11 17:30:05]
      */
     public static String timestamp() {
-        return new SimpleDateFormat("[MM-dd HH:mm:ss]").format(new Date());
+        return new SimpleDateFormat("[yyyy-MM-dd HH:mm:ss]").format(new Date());
     }
 
     /**

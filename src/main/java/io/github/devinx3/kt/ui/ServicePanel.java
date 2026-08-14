@@ -1,6 +1,8 @@
 package io.github.devinx3.kt.ui;
 
 import io.github.devinx3.kt.core.ServiceStore;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
@@ -80,6 +82,9 @@ public class ServicePanel implements MenuPanel {
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
             HBox row = new HBox(5, new Label(service + " : " + port), spacer, editBtn, delBtn, pinBtn);
+            // 服务行文字垂直居中，左侧留一点间距
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setPadding(new Insets(0, 0, 0, 6));
             meshServiceBox.getChildren().add(row);
         }
     }

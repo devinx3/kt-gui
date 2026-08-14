@@ -1,0 +1,5 @@
+/* 淡化控件聚焦时的浅蓝色焦点框，同时淡化原本的边框 */
+.root {
+    -fx-focus-color: #CCCCCC;
+    -fx-faint-focus-color: #DDDDDD88;
+}

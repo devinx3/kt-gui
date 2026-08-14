@@ -13,8 +13,10 @@ import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -63,9 +65,16 @@ public class KtApp extends Application {
         buttonPane.setPrefWidth(130);
         ToggleGroup commandGroup = new ToggleGroup();
         for (MenuPanel p : panels) {
-            p.getButton().setMaxWidth(Double.MAX_VALUE);
-            p.getButton().setToggleGroup(commandGroup);
-            buttonPane.getChildren().add(p.getButton());
+            ToggleButton menuBtn = p.getButton();
+            menuBtn.setMaxWidth(Double.MAX_VALUE);
+            menuBtn.setToggleGroup(commandGroup);
+            // 已选中的按钮再次点击：吞掉按下事件，不取消选中（右侧面板保持打开）也不触发命令
+            menuBtn.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+                if (menuBtn.isSelected()) {
+                    e.consume();
+                }
+            });
+            buttonPane.getChildren().add(menuBtn);
         }
 
         // 右侧：面板区，只展示当前选中按钮对应的面板
@@ -114,7 +123,7 @@ public class KtApp extends Application {
                 msg.append("以下服务 mesh 会话仍处于活动状态：\n")
                         .append(String.join(", ", activeMesh)).append('\n');
             }
-            if (msg.length() > 0) {
+            if (!msg.isEmpty()) {
                 Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
                 alert.setTitle("确认退出");
                 alert.setHeaderText("存在未清理的活动会话");
@@ -126,6 +135,7 @@ public class KtApp extends Application {
         });
 
         Scene scene = new Scene(root, 1150, 720);
+        scene.getStylesheets().add(KtApp.class.getResource("/style.css").toExternalForm());
         primaryStage.setScene(scene);
         primaryStage.show();
     }
