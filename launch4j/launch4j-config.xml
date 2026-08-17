@@ -2,8 +2,8 @@
 <launch4jConfig>
   <dontWrapJar>false</dontWrapJar>
   <headerType>gui</headerType>
-  <jar>D:\work\tools\kt-gui-0.2.jar</jar>
-  <outfile>D:\work\tools\exe\kt-gui.exe</outfile>
+  <jar>.\kt-gui.jar</jar>
+  <outfile>.\kt-gui.exe</outfile>
   <errTitle></errTitle>
   <cmdLine></cmdLine>
   <chdir>.</chdir>
@@ -12,8 +12,8 @@
   <supportUrl></supportUrl>
   <stayAlive>true</stayAlive>
   <restartOnCrash>false</restartOnCrash>
-  <manifest></manifest>
-  <icon>D:\work\tools\kt-gui\public\favicon.ico</icon>
+  <manifest>manifest.xml</manifest>
+  <icon>..\public\favicon.ico</icon>
   <singleInstance>
     <mutexName>kt-gui-mutex-devinx3</mutexName>
     <windowTitle>KT GUI for Windows</windowTitle>

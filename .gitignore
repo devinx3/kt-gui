@@ -29,6 +29,7 @@ target/
 *.zip
 *.tar.gz
 *.rar
+*.exe
 
 # system ignore
 .DS_Store
