@@ -10,7 +10,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
 /**
- * 连接面板：执行 ktctl connect，带终止按钮与成功状态（按钮变绿）
+ * 连接面板：点击"执行"才运行 ktctl connect，带终止按钮与成功状态（按钮变绿）
  */
 public class ConnectPanel implements MenuPanel {
 
@@ -23,14 +23,14 @@ public class ConnectPanel implements MenuPanel {
     public ConnectPanel(CommandRunner runner) {
         this.runner = runner;
 
-        // 每个命令面板 = 标题 + 控制台输出区
+        // 每个命令面板 = 标题 + 控制台输出区；执行按钮负责真正执行命令
+        Button executeBtn = new Button("执行");
+        executeBtn.setOnAction(e -> handleExecute());
         Button terminateBtn = new Button("终止");
         terminateBtn.setOnAction(e -> handleTerminate());
-        HBox connectHeader = new HBox(10, new Label("连接"), terminateBtn);
+        HBox connectHeader = new HBox(10, new Label("连接"), executeBtn, terminateBtn);
         pane.getChildren().addAll(connectHeader, connectArea.getListView());
         VBox.setVgrow(connectArea.getListView(), Priority.ALWAYS);
-
-        btn.setOnAction(e -> handleConnect());
     }
 
     @Override
@@ -44,9 +44,9 @@ public class ConnectPanel implements MenuPanel {
     }
 
     /**
-     * 点击"连接"：命令执行中或已连接成功时不重复执行
+     * 点击"执行"：命令执行中或已连接成功时不重复执行
      */
-    private void handleConnect() {
+    private void handleExecute() {
         // 连接命令正在执行时，再次点击无需重复执行
         if (runner.isRunning("connect")) {
             connectArea.append(Ui.timestamp() + " 连接命令正在执行中，请勿重复点击", false);

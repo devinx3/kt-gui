@@ -6,7 +6,6 @@ import io.github.devinx3.kt.ui.CleanPanel;
 import io.github.devinx3.kt.ui.ConfigPanel;
 import io.github.devinx3.kt.ui.ConnectPanel;
 import io.github.devinx3.kt.ui.MenuPanel;
-import io.github.devinx3.kt.ui.MeshRecoverPanel;
 import io.github.devinx3.kt.ui.ServicePanel;
 import javafx.application.Application;
 import javafx.geometry.Insets;
@@ -26,7 +25,7 @@ import javafx.stage.Stage;
 import java.util.Set;
 
 /**
- * kt GUI 主入口：组装主菜单五个面板（配置/连接/服务/Mesh-Recover/清理）与共享执行器
+ * kt GUI 主入口：组装主菜单四个面板（配置/连接/服务/清理）与共享执行器
  */
 public class KtApp extends Application {
 
@@ -44,18 +43,17 @@ public class KtApp extends Application {
         ServiceStore store = new ServiceStore();
         runner = new CommandRunner();
 
-        // 主菜单五个面板（按钮 → 面板）
+        // 主菜单四个面板（按钮 → 面板）
         ConfigPanel configPanel = new ConfigPanel(runner);
         ConnectPanel connectPanel = new ConnectPanel(runner);
         CleanPanel cleanPanel = new CleanPanel(runner);
-        MeshRecoverPanel meshRecoverPanel = new MeshRecoverPanel(store);
-        ServicePanel servicePanel = new ServicePanel(store, meshRecoverPanel::onServiceDeleted);
+        ServicePanel servicePanel = new ServicePanel(store);
 
-        // 命令执行联动：执行期间禁用 Mesh/Recover；配置收集失败时在配置面板提示
-        runner.setOnStateChanged(meshRecoverPanel::updateMeshRecoverState);
+        // 命令执行联动：配置收集失败时在配置面板提示；执行期间刷新服务面板按钮状态
+        runner.setOnStateChanged(servicePanel::updateServiceState);
         runner.setOnCollectError(configPanel::showLoadError);
 
-        MenuPanel[] panels = {configPanel, connectPanel, servicePanel, meshRecoverPanel, cleanPanel};
+        MenuPanel[] panels = {configPanel, connectPanel, servicePanel, cleanPanel};
 
         // 布局：左侧按钮列 + 右侧当前选中按钮的面板
         // 左侧：按钮垂直排列，点击后显示选中状态（ToggleGroup 单选）
@@ -101,10 +99,9 @@ public class KtApp extends Application {
         root.getChildren().addAll(body);
         VBox.setVgrow(body, Priority.ALWAYS);
 
-        meshRecoverPanel.updateMeshRecoverState(); // 初始状态：Mesh/Recover 可用
+        servicePanel.updateServiceState(); // 初始状态：服务面板按钮可用
 
         servicePanel.refreshServices(); // 加载已保存的 Mesh 服务列表
-        meshRecoverPanel.refreshMeshRecoverServices(); // 加载 Mesh/Recover 面板服务列表
 
         // 默认不选中任何按钮，点击后才显示对应面板
         for (MenuPanel p : panels) {
@@ -118,7 +115,7 @@ public class KtApp extends Application {
             if (connectPanel.isConnected()) {
                 msg.append("连接会话仍处于活动状态（连接按钮为绿色）\n");
             }
-            Set<String> activeMesh = meshRecoverPanel.getActiveMeshServices();
+            Set<String> activeMesh = servicePanel.getActiveMeshServices();
             if (!activeMesh.isEmpty()) {
                 msg.append("以下服务 mesh 会话仍处于活动状态：\n")
                         .append(String.join(", ", activeMesh)).append('\n');

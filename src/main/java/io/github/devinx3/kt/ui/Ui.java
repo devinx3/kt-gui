@@ -10,11 +10,6 @@ import java.util.Date;
  */
 public final class Ui {
 
-    /**
-     * 服务列表宽度：服务面板与 Mesh/Recover 面板保持一致（取两者中较宽者）
-     */
-    public static final double SERVICE_LIST_WIDTH = 380;
-
     private Ui() {
     }
 
