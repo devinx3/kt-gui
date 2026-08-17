@@ -10,7 +10,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
 /**
- * 清理面板：执行 ktctl clean，带终止按钮
+ * 清理面板：点击"执行"才运行 ktctl clean，带终止按钮
  */
 public class CleanPanel implements MenuPanel {
 
@@ -22,14 +22,14 @@ public class CleanPanel implements MenuPanel {
     public CleanPanel(CommandRunner runner) {
         this.runner = runner;
 
-        // 标题 + 终止按钮，与连接面板保持一致
+        // 标题 + 执行/终止按钮，与连接面板保持一致；执行按钮负责真正执行命令
+        Button executeBtn = new Button("执行");
+        executeBtn.setOnAction(e -> handleExecute());
         Button terminateBtn = new Button("终止");
         terminateBtn.setOnAction(e -> handleTerminate());
-        HBox cleanHeader = new HBox(10, new Label("清理"), terminateBtn);
+        HBox cleanHeader = new HBox(10, new Label("清理"), executeBtn, terminateBtn);
         pane.getChildren().addAll(cleanHeader, cleanArea.getListView());
         VBox.setVgrow(cleanArea.getListView(), Priority.ALWAYS);
-
-        btn.setOnAction(e -> handleClean());
     }
 
     @Override
@@ -42,7 +42,7 @@ public class CleanPanel implements MenuPanel {
         return pane;
     }
 
-    private void handleClean() {
+    private void handleExecute() {
         // 清理命令正在执行时，再次点击无需重复执行
         if (runner.isRunning("clean")) {
             cleanArea.append(Ui.timestamp() + " 清理命令正在执行中，请勿重复点击", false);
