@@ -36,8 +36,9 @@
     </dependencies>
 
     <build>
+        <finalName>kt-gui</finalName>
 		<!-- mvn clean package javafx:jlink jpackage:jpackage -->
-        <plugins>		
+        <plugins>
 		<plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-compiler-plugin</artifactId>
