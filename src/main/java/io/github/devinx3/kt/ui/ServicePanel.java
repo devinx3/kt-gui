@@ -248,6 +248,15 @@ public class ServicePanel implements MenuPanel {
         return meshSuccessServices;
     }
 
+    /**
+     * 停止所有正在运行的服务命令（mesh/recover），退出确认后调用
+     */
+    public void stopAllActiveServices() {
+        for (String service : new ArrayList<>(serviceProcesses.keySet())) {
+            stopService(service);
+        }
+    }
+
     private void showAddServiceDialog() {
         showServiceDialog(null, null);
     }

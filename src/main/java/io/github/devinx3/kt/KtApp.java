@@ -109,11 +109,11 @@ public class KtApp extends Application {
             p.getPane().setManaged(false);
         }
 
-        // 退出时校验：连接/服务 mesh 会话仍活动则确认后再退出
+        // 退出时校验：连接/服务 mesh 会话仍活动则确认后再退出；确认后先终止所有活动会话再退出
         primaryStage.setOnCloseRequest(e -> {
             StringBuilder msg = new StringBuilder();
             if (connectPanel.isConnected()) {
-                msg.append("连接会话仍处于活动状态（连接按钮为绿色）\n");
+                msg.append("连接会话仍处于活动状态\n");
             }
             Set<String> activeMesh = servicePanel.getActiveMeshServices();
             if (!activeMesh.isEmpty()) {
@@ -124,9 +124,13 @@ public class KtApp extends Application {
                 Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
                 alert.setTitle("确认退出");
                 alert.setHeaderText("存在未清理的活动会话");
-                alert.setContentText(msg + "\n确定要退出吗？");
+                alert.setContentText(msg + "确定要退出吗？确认后将自动终止上述活动会话。");
                 if (alert.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
                     e.consume(); // 用户取消，阻止退出
+                } else {
+                    // 用户确认退出：先终止所有已连接的会话（connect 发 Ctrl+C，mesh 执行 stop）
+                    connectPanel.disconnect();
+                    servicePanel.stopAllActiveServices();
                 }
             }
         });

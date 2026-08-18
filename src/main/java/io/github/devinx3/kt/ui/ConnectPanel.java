@@ -92,4 +92,15 @@ public class ConnectPanel implements MenuPanel {
     public boolean isConnected() {
         return connectedOk;
     }
+
+    /**
+     * 断开连接（退出确认后调用）：发送 Ctrl+C 终止 connect 命令并清除连接成功状态
+     */
+    public void disconnect() {
+        if (runner.isRunning("connect")) {
+            btn.setStyle("");
+            connectedOk = false;
+            runner.terminateCurrent();
+        }
+    }
 }
