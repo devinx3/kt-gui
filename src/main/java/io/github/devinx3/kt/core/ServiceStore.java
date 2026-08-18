@@ -8,12 +8,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Mesh 服务配置文件读写（服务名 → 端口 的 JSON），存放于 ~/.kube/.kt-gui/services.json
+ * Mesh 服务配置文件读写（服务名 → 端口 的 JSON），存放于 ~/.kt-gui/services.json
  */
 public class ServiceStore {
 
     // Mesh 服务配置文件（服务名 → 端口 的 JSON）
-    private static final String SERVICES_FILE = System.getProperty("user.home") + "/.kube/.kt-gui/services.json";
+    private static final String SERVICES_FILE = System.getProperty("user.home") + "/.ktgui/services.json";
 
     /**
      * 从 JSON 文件加载服务列表（服务名 → 端口）
@@ -25,7 +25,7 @@ public class ServiceStore {
             return services;
         }
         try {
-            String content = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).trim();
+            String content = Files.readString(f.toPath()).trim();
             if (content.startsWith("{") && content.endsWith("}")) {
                 String body = content.substring(1, content.length() - 1);
                 for (String pair : body.split(",")) {
