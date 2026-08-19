@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <exe4j version="10.1" transformSequenceNumber="3">
-  <application name="KT GUI" distributionSourceDir="$PROJECT_PATH/launch4j" />
+  <application name="KT GUI" distributionSourceDir="$PROJECT_PATH/launcher" />
   <executable name="kt-gui" iconSet="true" iconFile="$PROJECT_PATH/public/favicon.ico" executableDir="." redirectStderr="false" executableMode="gui" singleInstance="true" executionLevel="requireAdministrator" wrapperType="embed">
-    <versionInfo include="true" fileVersion="0.2.0.0" fileDescription="KT GUI for Windows" legalCopyright="Copyright (C) 2026 devinx3" internalName="KT GUI" companyName="devinx3" productVersion="0.2" />
+    <versionInfo include="true" fileVersion="0.3.0.0" fileDescription="KT GUI for Windows" legalCopyright="Copyright (C) 2026 devinx3" internalName="KT GUI" companyName="devinx3" productVersion="0.3" />
   </executable>
   <java mainClass="io.github.devinx3.kt.Launcher" bundleRuntime="true" minVersion="17">
     <searchSequence>
