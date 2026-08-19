@@ -23,9 +23,8 @@ public class ConfigPanel implements MenuPanel {
     private final VBox pane = new VBox(5);
     private final CommandRunner runner;
 
-    public ConfigPanel(CommandRunner runner) {
-        this.runner = runner;
-
+    public ConfigPanel() {
+        this.runner = new CommandRunner();
         configTable.setPrefHeight(250);
         configTable.setPlaceholder(new Label("无配置内容"));
         TableColumn<String[], String> nameCol = new TableColumn<>("配置名称");

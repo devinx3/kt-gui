@@ -48,7 +48,7 @@ public class ConnectPanel implements MenuPanel {
      */
     private void handleExecute() {
         // 连接命令正在执行时，再次点击无需重复执行
-        if (runner.isRunning("connect")) {
+        if (isConnecting()) {
             connectArea.append(Ui.timestamp() + " 连接命令正在执行中，请勿重复点击", false);
             return;
         }
@@ -62,6 +62,13 @@ public class ConnectPanel implements MenuPanel {
     }
 
     /**
+     * 执行连接命令（主页"一键启动"调用，与点击"执行"按钮等效）
+     */
+    public void execute() {
+        handleExecute();
+    }
+
+    /**
      * 终止当前命令：提示 + 终止的是连接命令时清除绿色底色
      */
     private void handleTerminate() {
@@ -71,11 +78,15 @@ public class ConnectPanel implements MenuPanel {
         }
         connectArea.append(Ui.timestamp() + " 已发送终止信号 (Ctrl+C)", false);
         // 终止的是连接命令时，清除连接成功的绿色底色
-        if (runner.isRunning("connect")) {
+        if (isConnecting()) {
             btn.setStyle("");
             connectedOk = false;
         }
-        runner.terminateCurrent();
+        terminate();
+    }
+
+    public void terminate() {
+        runner.terminateCurrent(true);
     }
 
     /**
@@ -93,14 +104,18 @@ public class ConnectPanel implements MenuPanel {
         return connectedOk;
     }
 
+    public boolean isConnecting() {
+        return runner.isBusy();
+    }
+
     /**
      * 断开连接（退出确认后调用）：发送 Ctrl+C 终止 connect 命令并清除连接成功状态
      */
     public void disconnect() {
-        if (runner.isRunning("connect")) {
+        if (isConnecting()) {
             btn.setStyle("");
             connectedOk = false;
-            runner.terminateCurrent();
+            terminate();
         }
     }
 }

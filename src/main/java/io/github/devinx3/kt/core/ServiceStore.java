@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -14,11 +15,30 @@ public class ServiceStore {
 
     // Mesh 服务配置文件（服务名 → 端口 的 JSON）
     private static final String SERVICES_FILE = System.getProperty("user.home") + "/.ktgui/services.json";
-
+    Map<String, String> services = null;
     /**
      * 从 JSON 文件加载服务列表（服务名 → 端口）
      */
+    public Map<String, String> list() {
+        if (this.services == null) {
+            load();
+        }
+        return Collections.unmodifiableMap(this.services);
+    }
+
+    public Map<String, String> listForUpdate() {
+        if (this.services == null) {
+            load();
+        }
+        return new LinkedHashMap<>(this.services);
+    }
+
     public Map<String, String> load() {
+        this.services = loadFromFile();
+        return Collections.unmodifiableMap(this.services);
+    }
+
+    private Map<String, String> loadFromFile() {
         Map<String, String> services = new LinkedHashMap<>();
         File f = new File(SERVICES_FILE);
         if (!f.exists()) {
@@ -41,6 +61,7 @@ public class ServiceStore {
             }
         } catch (IOException ignored) {
             // 读取失败时返回空列表
+            System.err.println("load services error");
         }
         return services;
     }
@@ -67,7 +88,9 @@ public class ServiceStore {
             }
             Files.write(f.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) {
+            System.err.println("save services error");
         }
+        this.services = new LinkedHashMap<>(services);
     }
 
     private String escape(String s) {

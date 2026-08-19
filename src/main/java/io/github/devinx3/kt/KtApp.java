@@ -5,6 +5,7 @@ import io.github.devinx3.kt.core.ServiceStore;
 import io.github.devinx3.kt.ui.CleanPanel;
 import io.github.devinx3.kt.ui.ConfigPanel;
 import io.github.devinx3.kt.ui.ConnectPanel;
+import io.github.devinx3.kt.ui.HomePanel;
 import io.github.devinx3.kt.ui.MenuPanel;
 import io.github.devinx3.kt.ui.ServicePanel;
 import javafx.application.Application;
@@ -22,6 +23,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -29,7 +31,7 @@ import java.util.Set;
  */
 public class KtApp extends Application {
 
-    private CommandRunner runner;
+    private CommandRunner connectRunner;
 
     @Override
     public void start(Stage primaryStage) {
@@ -41,19 +43,23 @@ public class KtApp extends Application {
 
         // 共享依赖
         ServiceStore store = new ServiceStore();
-        runner = new CommandRunner();
+        connectRunner = new CommandRunner();
 
-        // 主菜单四个面板（按钮 → 面板）
-        ConfigPanel configPanel = new ConfigPanel(runner);
-        ConnectPanel connectPanel = new ConnectPanel(runner);
-        CleanPanel cleanPanel = new CleanPanel(runner);
+        // 主菜单面板（按钮 → 面板），主页按钮置于最上方
+        ConfigPanel configPanel = new ConfigPanel();
+        ConnectPanel connectPanel = new ConnectPanel(connectRunner);
+        CleanPanel cleanPanel = new CleanPanel();
         ServicePanel servicePanel = new ServicePanel(store);
+        HomePanel homePanel = new HomePanel(connectPanel, servicePanel, store);
 
-        // 命令执行联动：配置收集失败时在配置面板提示；执行期间刷新服务面板按钮状态
-        runner.setOnStateChanged(servicePanel::updateServiceState);
-        runner.setOnCollectError(configPanel::showLoadError);
+        // 命令执行联动：配置收集失败时在配置面板提示；执行期间刷新服务面板按钮状态与主页运行情况
+        connectRunner.setOnStateChanged(() -> {
+            servicePanel.updateServiceState();
+            homePanel.refresh();
+        });
+        connectRunner.setOnCollectError(configPanel::showLoadError);
 
-        MenuPanel[] panels = {configPanel, connectPanel, servicePanel, cleanPanel};
+        MenuPanel[] panels = {homePanel, configPanel, connectPanel, servicePanel, cleanPanel};
 
         // 布局：左侧按钮列 + 右侧当前选中按钮的面板
         // 左侧：按钮垂直排列，点击后显示选中状态（ToggleGroup 单选）
@@ -103,23 +109,27 @@ public class KtApp extends Application {
 
         servicePanel.refreshServices(); // 加载已保存的 Mesh 服务列表
 
-        // 默认不选中任何按钮，点击后才显示对应面板
-        for (MenuPanel p : panels) {
-            p.getPane().setVisible(false);
-            p.getPane().setManaged(false);
-        }
+        // 应用打开后默认选中主页按钮，展示连接与服务的运行情况
+        homePanel.getButton().setSelected(true);
+        homePanel.refresh();
 
-        // 退出时校验：连接/服务 mesh 会话仍活动则确认后再退出；确认后先终止所有活动会话再退出
+        // 退出时校验：连接/服务会话仍活动（含正在执行中的命令）则确认后再退出；确认后先终止再退出
         primaryStage.setOnCloseRequest(e -> {
             StringBuilder msg = new StringBuilder();
+            // 连接：已连接成功 或 连接命令正在执行中
             if (connectPanel.isConnected()) {
                 msg.append("连接会话仍处于活动状态\n");
+            } else if (connectPanel.isConnecting()) {
+                msg.append("连接命令正在执行中\n");
             }
-            Set<String> activeMesh = servicePanel.getActiveMeshServices();
-            if (!activeMesh.isEmpty()) {
-                msg.append("以下服务 mesh 会话仍处于活动状态：\n")
-                        .append(String.join(", ", activeMesh)).append('\n');
+            // 服务：mesh/recover 命令
+            Set<String> runningServices = new LinkedHashSet<>(servicePanel.getRunningServices().keySet());
+            runningServices.addAll(servicePanel.getActiveMeshServices());
+            if (!runningServices.isEmpty()) {
+                msg.append("以下服务命令仍处于活动状态：\n")
+                        .append(String.join(", ", runningServices)).append('\n');
             }
+            boolean existed = true;
             if (!msg.isEmpty()) {
                 Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
                 alert.setTitle("确认退出");
@@ -127,11 +137,12 @@ public class KtApp extends Application {
                 alert.setContentText(msg + "确定要退出吗？确认后将自动终止上述活动会话。");
                 if (alert.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
                     e.consume(); // 用户取消，阻止退出
-                } else {
-                    // 用户确认退出：先终止所有已连接的会话（connect 发 Ctrl+C，mesh 执行 stop）
-                    connectPanel.disconnect();
-                    servicePanel.stopAllActiveServices();
+                    existed = false;
                 }
+            }
+            if (existed) {
+                servicePanel.stopAllActiveServices();
+                connectPanel.disconnect();
             }
         });
 
@@ -143,8 +154,8 @@ public class KtApp extends Application {
 
     @Override
     public void stop() {
-        if (runner != null) {
-            runner.shutdown();
+        if (connectRunner != null) {
+            connectRunner.shutdown();
         }
     }
 

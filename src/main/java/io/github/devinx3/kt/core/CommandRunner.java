@@ -56,20 +56,6 @@ public class CommandRunner {
     }
 
     /**
-     * 指定的命令是否正在执行（如 "connect"、"clean"）
-     */
-    public boolean isRunning(String command) {
-        return command.equals(currentCommand);
-    }
-
-    /**
-     * 当前正在执行的命令名（args[0]），无命令时为 null
-     */
-    public String getCurrentCommand() {
-        return currentCommand;
-    }
-
-    /**
      * 执行命令，输出到指定控制台
      */
     public void runCommandTo(ListView<ConsoleLine> target, String... args) {
@@ -170,17 +156,21 @@ public class CommandRunner {
         });
     }
 
+
+    public void terminateCurrent() {
+        terminateCurrent(false);
+    }
+
     /**
      * 终止当前正在执行的进程：仅 connect 命令发送真正的 Ctrl+C（Windows），其余命令（clean 等）直接 destroy；
      * 超时未退出则强制终止。面板负责在此前后输出提示信息与联动（如清除连接成功底色）。
      */
-    public void terminateCurrent() {
+    public void terminateCurrent(boolean ctrlC) {
         Process p = currentProcess;
         if (p == null) {
             return;
         }
-        // 仅 connect 命令需要优雅断开（发送真正的 Ctrl+C）；clean 等其余命令直接终止即可
-        if ("connect".equals(currentCommand)) {
+        if (ctrlC) {
             if (!CtrlC.send(p)) {
                 p.destroy();
             }

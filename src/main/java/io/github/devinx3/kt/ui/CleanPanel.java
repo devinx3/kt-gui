@@ -19,9 +19,8 @@ public class CleanPanel implements MenuPanel {
     private final VBox pane = new VBox(5);
     private final CommandRunner runner;
 
-    public CleanPanel(CommandRunner runner) {
-        this.runner = runner;
-
+    public CleanPanel() {
+        this.runner = new CommandRunner();
         // 标题 + 执行/终止按钮，与连接面板保持一致；执行按钮负责真正执行命令
         Button executeBtn = new Button("执行");
         executeBtn.setOnAction(e -> handleExecute());
@@ -44,7 +43,7 @@ public class CleanPanel implements MenuPanel {
 
     private void handleExecute() {
         // 清理命令正在执行时，再次点击无需重复执行
-        if (runner.isRunning("clean")) {
+        if (runner.isBusy()) {
             cleanArea.append(Ui.timestamp() + " 清理命令正在执行中，请勿重复点击", false);
             return;
         }

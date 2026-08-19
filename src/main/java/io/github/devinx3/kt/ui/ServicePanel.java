@@ -98,7 +98,7 @@ public class ServicePanel implements MenuPanel {
      * 刷新服务列表（每行：服务名 : 端口 + 修改/删除/置顶/mesh/recover/stop 按钮靠右，点击行选中该服务）
      */
     public void refreshServices() {
-        Map<String, String> services = store.load();
+        Map<String, String> services = store.list();
         serviceListBox.getChildren().clear();
         serviceNameLabels.clear();
         serviceActionButtons.clear();
@@ -249,6 +249,32 @@ public class ServicePanel implements MenuPanel {
     }
 
     /**
+     * 正在运行命令的服务（服务名 → 命令 mesh/recover），主页展示用
+     */
+    public Map<String, String> getRunningServices() {
+        return new LinkedHashMap<>(serviceCommands);
+    }
+
+    /**
+     * 执行服务列表第一个服务的 mesh（主页"一键启动"调用，等同点击该服务行的 mesh 按钮）；
+     * 无服务、运行中或已 mesh 成功时不执行
+     */
+    public void startFirstServiceMesh() {
+        Map<String, String> services = store.list();
+        if (services.isEmpty()) {
+            return;
+        }
+        Map.Entry<String, String> first = services.entrySet().iterator().next();
+        String service = first.getKey();
+        String port = first.getValue();
+        // 与 mesh 按钮禁用条件一致：运行中或已成功后不再执行
+        if (serviceCommands.containsKey(service) || meshSuccessServices.contains(service)) {
+            return;
+        }
+        startServiceCommand(service, port, "mesh");
+    }
+
+    /**
      * 停止所有正在运行的服务命令（mesh/recover），退出确认后调用
      */
     public void stopAllActiveServices() {
@@ -303,7 +329,7 @@ public class ServicePanel implements MenuPanel {
                 Ui.showAlert("端口必须是 0-65535 之间的整数");
                 continue;
             }
-            Map<String, String> services = store.load();
+            Map<String, String> services = store.listForUpdate();
             if (oldName == null) {
                 // 新增：服务名必须唯一
                 if (services.containsKey(currentName)) {
@@ -333,11 +359,6 @@ public class ServicePanel implements MenuPanel {
      * 删除指定服务（二次确认后执行）
      */
     private void deleteService(String name) {
-        Map<String, String> services = store.load();
-        if (!services.containsKey(name)) {
-            Ui.showAlert("服务不存在: " + name);
-            return;
-        }
         // 二次确认：防止误删
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
         confirm.setTitle("确认删除");
@@ -345,6 +366,11 @@ public class ServicePanel implements MenuPanel {
         confirm.setContentText("确定要删除服务 " + name + " 吗？");
         if (confirm.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
             return; // 用户取消，不删除
+        }
+        Map<String, String> services = store.listForUpdate();
+        if (!services.containsKey(name)) {
+            Ui.showAlert("服务不存在: " + name);
+            return;
         }
         services.remove(name);
         store.save(services);
@@ -359,7 +385,7 @@ public class ServicePanel implements MenuPanel {
      * 将指定服务置顶（移到列表最前面）并保存
      */
     private void pinService(String name) {
-        Map<String, String> services = store.load();
+        Map<String, String> services = store.listForUpdate();
         String port = services.remove(name);
         if (port == null) {
             Ui.showAlert("服务不存在: " + name);
