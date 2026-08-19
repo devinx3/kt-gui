@@ -76,7 +76,7 @@
                             <jar>${project.build.directory}/${project.build.finalName}.jar</jar>
                             <stayAlive>true</stayAlive>
                             <restartOnCrash>false</restartOnCrash>
-                            <manifest>launch4j/manifest.xml</manifest>
+                            <manifest>launcher/manifest.xml</manifest>
                             <icon>public/favicon.ico</icon>
                             <singleInstance>
                                 <mutexName>kt-gui-mutex-devinx3</mutexName>
@@ -93,11 +93,11 @@
                                 <maxVersion></maxVersion>
                             </jre>
                             <versionInfo>
-                                <fileVersion>${project.version}.0.0</fileVersion>
+                                <fileVersion>${project.version}.0</fileVersion>
                                 <txtFileVersion>${project.version}</txtFileVersion>
                                 <fileDescription>KT GUI for Windows</fileDescription>
                                 <copyright>Copyright (C) 2026 devinx3</copyright>
-                                <productVersion>${project.version}.0.0</productVersion>
+                                <productVersion>${project.version}.0</productVersion>
                                 <txtProductVersion>${project.version}</txtProductVersion>
                                 <productName>KT GUI</productName>
                                 <companyName></companyName>
