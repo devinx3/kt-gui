@@ -1,19 +1,19 @@
 ﻿; ============================================================
 ;  kt-gui NSIS 安装打包脚本
 ;  项目: KT GUI (JavaFX 17, io.github.devinx3.kt.Launcher)
-;  版本: 0.3.0
+;  版本: 0.3.1
 ;
 ;  构建步骤:
 ;   1) 生成自包含应用镜像 target/app/kt-gui (二选一):
 ;      a. 修改 pom.xml 中 jpackage-maven-plugin 的 <type> 为 APP_IMAGE,
 ;         然后执行: mvn clean package javafx:jlink jpackage:jpackage
 ;      b. 或手动执行:
-;         jpackage --name kt-gui --app-version 0.3.0 --vendor devinx3 \
+;         jpackage --name kt-gui --app-version 0.3.1 --vendor devinx3 \
 ;                  --module io.github.devinx3.kt/io.github.devinx3.kt.Launcher \
 ;                  --runtime-image target/image --type app-image \
 ;                  --dest target/app --icon public/favicon.ico
 ;   2) makensis kt-gui.nsi
-;   输出: dist/KT-GUI-Setup-0.3.0.exe
+;   输出: dist/KT-GUI-Setup-0.3.1.exe
 ;
 ;  注意: 本文件必须保存为 "UTF-8 带 BOM" 编码 (中文界面字符串依赖它)。
 ; ============================================================
@@ -24,7 +24,7 @@ Unicode true
 ; ---------------- 常量 ----------------
 !define APP_NAME      "KT GUI"
 !define APP_EXE       "kt-gui.exe"
-!define APP_VERSION   "0.3.0"
+!define APP_VERSION   "0.3.1"
 !define APP_PUBLISHER "devinx3"
 !define APP_ID        "kt-gui"
 !define APP_SRC       "target\app\kt-gui"          ; jpackage 应用镜像目录
@@ -39,7 +39,7 @@ InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
-VIProductVersion "0.3.0.0"
+VIProductVersion "0.3.1.0"
 VIAddVersionKey "ProductName"     "${APP_NAME}"
 VIAddVersionKey "ProductVersion"  "${APP_VERSION}"
 VIAddVersionKey "FileDescription" "${APP_NAME} 安装程序"

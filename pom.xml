@@ -6,8 +6,9 @@
 
     <groupId>devinx3.github.io</groupId>
     <artifactId>kt-gui</artifactId>
-    <version>0.3.0</version>
+    <version>0.3.1</version>
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <javafx.version>21</javafx.version>
@@ -28,6 +29,7 @@
             <artifactId>jna-jpms</artifactId>
             <version>5.14.0</version>
         </dependency>
+        <!-- jna-platform：CtrlC 使用 com.sun.jna.platform.win32.Kernel32/WinDef -->
         <dependency>
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna-platform-jpms</artifactId>
