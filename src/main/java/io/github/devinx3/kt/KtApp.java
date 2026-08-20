@@ -1,6 +1,6 @@
 package io.github.devinx3.kt;
 
-import io.github.devinx3.kt.core.CommandRunner;
+import io.github.devinx3.kt.core.KtEventBus;
 import io.github.devinx3.kt.core.ServiceStore;
 import io.github.devinx3.kt.ui.CleanPanel;
 import io.github.devinx3.kt.ui.ConfigPanel;
@@ -8,8 +8,8 @@ import io.github.devinx3.kt.ui.ConnectPanel;
 import io.github.devinx3.kt.ui.HomePanel;
 import io.github.devinx3.kt.ui.MenuPanel;
 import io.github.devinx3.kt.ui.ServicePanel;
+import io.github.devinx3.kt.ui.Ui;
 import javafx.application.Application;
-import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
@@ -24,139 +24,167 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.Map;
+import java.util.Optional;
 
 /**
- * kt GUI 主入口：组装主菜单四个面板（配置/连接/服务/清理）与共享执行器
+ * kt GUI 主入口：装配主界面。
  */
 public class KtApp extends Application {
 
-    private CommandRunner connectRunner;
+    private ConnectPanel connectPanel;
+    private ServicePanel servicePanel;
+    private CleanPanel cleanPanel;
+    private ConfigPanel configPanel;
 
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("KT 客户端");
-        // 设置应用图标（源自根目录 favicon.ico / favicon.svg，resources 中为转换后的 PNG）
         primaryStage.getIcons().addAll(
-                new Image(KtApp.class.getResourceAsStream("/favicon.png")),       // 32x32，源自 favicon.ico
-                new Image(KtApp.class.getResourceAsStream("/favicon-256.png")));  // 256x256，源自 favicon.svg
+                new Image(KtApp.class.getResourceAsStream("/favicon.png")),
+                new Image(KtApp.class.getResourceAsStream("/favicon-256.png")));
 
-        // 共享依赖
+        // 创建全局共享实例
+        KtEventBus bus = new KtEventBus();
         ServiceStore store = new ServiceStore();
-        connectRunner = new CommandRunner();
 
-        // 主菜单面板（按钮 → 面板），主页按钮置于最上方
-        ConfigPanel configPanel = new ConfigPanel();
-        ConnectPanel connectPanel = new ConnectPanel(connectRunner);
-        CleanPanel cleanPanel = new CleanPanel();
-        ServicePanel servicePanel = new ServicePanel(store);
-        HomePanel homePanel = new HomePanel(connectPanel, servicePanel, store);
-
-        // 命令执行联动：配置收集失败时在配置面板提示；执行期间刷新服务面板按钮状态与主页运行情况
-        connectRunner.setOnStateChanged(() -> {
-            servicePanel.updateServiceState();
-            homePanel.refresh();
-        });
-        connectRunner.setOnCollectError(configPanel::showLoadError);
+        // 构造五个面板（每个面板持有独立的 CommandRunner）
+        connectPanel = new ConnectPanel(bus);
+        cleanPanel = new CleanPanel(bus);
+        configPanel = new ConfigPanel(bus);
+        servicePanel = new ServicePanel(store, bus);
+        HomePanel homePanel = new HomePanel(connectPanel, servicePanel, store, bus);
+        // 服务列表增删改置顶后刷新主页
+        servicePanel.setOnServicesChanged(homePanel::refresh);
+        // 注册主窗口：所有 Alert 弹框继承其标题栏图标
+        Ui.setPrimaryStage(primaryStage);
 
         MenuPanel[] panels = {homePanel, configPanel, connectPanel, servicePanel, cleanPanel};
 
-        // 布局：左侧按钮列 + 右侧当前选中按钮的面板
-        // 左侧：按钮垂直排列，点击后显示选中状态（ToggleGroup 单选）
-        VBox buttonPane = new VBox(10);
-        buttonPane.setPadding(new Insets(10));
-        buttonPane.setStyle("-fx-border-color: #cccccc; -fx-border-width: 1;");
-        buttonPane.setPrefWidth(130);
+        // 左侧按钮列
+        VBox menuBox = new VBox(10);
+        menuBox.setPadding(new javafx.geometry.Insets(10));
+        menuBox.setPrefWidth(130);
+
         ToggleGroup commandGroup = new ToggleGroup();
         for (MenuPanel p : panels) {
-            ToggleButton menuBtn = p.getButton();
-            menuBtn.setMaxWidth(Double.MAX_VALUE);
-            menuBtn.setToggleGroup(commandGroup);
-            // 已选中的按钮再次点击：吞掉按下事件，不取消选中（右侧面板保持打开）也不触发命令
-            menuBtn.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
-                if (menuBtn.isSelected()) {
+            ToggleButton btn = p.getButton();
+            btn.setToggleGroup(commandGroup);
+            btn.setMaxWidth(Double.MAX_VALUE);
+            menuBox.getChildren().add(btn);
+
+            // 再次点击已选中按钮：吞事件
+            btn.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+                if (btn.isSelected()) {
                     e.consume();
                 }
             });
-            buttonPane.getChildren().add(menuBtn);
         }
 
-        // 右侧：面板区，只展示当前选中按钮对应的面板
-        StackPane panelArea = new StackPane();
+        // 右侧面板区
+        StackPane contentArea = new StackPane();
         for (MenuPanel p : panels) {
-            panelArea.getChildren().add(p.getPane());
+            contentArea.getChildren().add(p.getPane());
         }
 
-        // 点击按钮：切换右侧面板显示
+        // 面板切换
         commandGroup.selectedToggleProperty().addListener((obs, oldToggle, newToggle) -> {
             for (MenuPanel p : panels) {
-                boolean show = newToggle == p.getButton();
-                p.getPane().setVisible(show);
-                p.getPane().setManaged(show);
+                boolean visible = newToggle == p.getButton();
+                p.getPane().setVisible(visible);
+                p.getPane().setManaged(visible);
             }
         });
 
-        HBox body = new HBox(10);
-        body.getChildren().addAll(buttonPane, panelArea);
-        HBox.setHgrow(panelArea, Priority.ALWAYS);
+        HBox root = new HBox(10, menuBox, contentArea);
+        HBox.setHgrow(contentArea, Priority.ALWAYS);
 
-        VBox root = new VBox(10);
-        root.setPadding(new Insets(10));
-        root.getChildren().addAll(body);
-        VBox.setVgrow(body, Priority.ALWAYS);
+        VBox outerRoot = new VBox(10, root);
+        outerRoot.setPadding(new javafx.geometry.Insets(10));
 
-        servicePanel.updateServiceState(); // 初始状态：服务面板按钮可用
-
-        servicePanel.refreshServices(); // 加载已保存的 Mesh 服务列表
-
-        // 应用打开后默认选中主页按钮，展示连接与服务的运行情况
-        homePanel.getButton().setSelected(true);
-        homePanel.refresh();
-
-        // 退出时校验：连接/服务会话仍活动（含正在执行中的命令）则确认后再退出；确认后先终止再退出
-        primaryStage.setOnCloseRequest(e -> {
-            StringBuilder msg = new StringBuilder();
-            // 连接：已连接成功 或 连接命令正在执行中
-            if (connectPanel.isConnected()) {
-                msg.append("连接会话仍处于活动状态\n");
-            } else if (connectPanel.isConnecting()) {
-                msg.append("连接命令正在执行中\n");
-            }
-            // 服务：mesh/recover 命令
-            Set<String> runningServices = new LinkedHashSet<>(servicePanel.getRunningServices().keySet());
-            runningServices.addAll(servicePanel.getActiveMeshServices());
-            if (!runningServices.isEmpty()) {
-                msg.append("以下服务命令仍处于活动状态：\n")
-                        .append(String.join(", ", runningServices)).append('\n');
-            }
-            boolean existed = true;
-            if (!msg.isEmpty()) {
-                Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
-                alert.setTitle("确认退出");
-                alert.setHeaderText("存在未清理的活动会话");
-                alert.setContentText(msg + "确定要退出吗？确认后将自动终止上述活动会话。");
-                if (alert.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
-                    e.consume(); // 用户取消，阻止退出
-                    existed = false;
-                }
-            }
-            if (existed) {
-                servicePanel.stopAllActiveServices();
-                connectPanel.disconnect();
-            }
-        });
-
-        Scene scene = new Scene(root, 1150, 720);
+        Scene scene = new Scene(outerRoot, 960, 630);
         scene.getStylesheets().add(KtApp.class.getResource("/style.css").toExternalForm());
         primaryStage.setScene(scene);
+
+        // 初始流程
+        servicePanel.updateServiceState();
+        servicePanel.refreshServices();
+
+        // 默认选中主页
+        homePanel.getButton().setSelected(true);
+        homePanel.getPane().setVisible(true);
+        homePanel.getPane().setManaged(true);
+        for (MenuPanel p : panels) {
+            if (p != homePanel) {
+                p.getPane().setVisible(false);
+                p.getPane().setManaged(false);
+            }
+        }
+        homePanel.refresh();
+
+        // 退出确认
+        primaryStage.setOnCloseRequest(e -> {
+            String message = buildExitMessage();
+            if (message.isEmpty()) {
+                // 无活动会话，直接关闭
+                return;
+            }
+            Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+            alert.setTitle("确认退出");
+            alert.setHeaderText("存在未清理的活动会话");
+            alert.setContentText(message + "确定要退出吗？确认后将自动终止上述活动会话。");
+            Ui.initOwner(alert);
+            Optional<ButtonType> result = alert.showAndWait();
+            if (result.isEmpty() || result.get() != ButtonType.OK) {
+                e.consume();
+                return;
+            }
+            servicePanel.stopAllActiveServices();
+            connectPanel.disconnect();
+        });
+
         primaryStage.show();
+    }
+
+    private String buildExitMessage() {
+        StringBuilder sb = new StringBuilder();
+        if (connectPanel.isConnected()) {
+            sb.append("连接会话仍处于活动状态\n");
+        } else if (connectPanel.isConnecting()) {
+            sb.append("连接命令正在执行中\n");
+        }
+
+        Map<String, String> runningServices = servicePanel.getRunningServices();
+        LinkedHashSet<String> meshOk = servicePanel.getActiveMeshServices();
+
+        // 并集
+        LinkedHashSet<String> activeServiceNames = new LinkedHashSet<>();
+        activeServiceNames.addAll(runningServices.keySet());
+        activeServiceNames.addAll(meshOk);
+
+        if (!activeServiceNames.isEmpty()) {
+            sb.append("以下服务命令仍处于活动状态：\n");
+            sb.append(String.join("，", activeServiceNames));
+            sb.append("\n");
+        }
+
+        return sb.toString();
     }
 
     @Override
     public void stop() {
-        if (connectRunner != null) {
-            connectRunner.shutdown();
+        // 清理每个面板独立持有的执行器
+        if (connectPanel != null) {
+            connectPanel.shutdown();
+        }
+        if (cleanPanel != null) {
+            cleanPanel.shutdown();
+        }
+        if (configPanel != null) {
+            configPanel.shutdown();
+        }
+        if (servicePanel != null) {
+            servicePanel.shutdown();
         }
     }
-
 }

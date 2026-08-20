@@ -1,7 +1,9 @@
 package io.github.devinx3.kt.ui;
 
+import io.github.devinx3.kt.core.CommandEvent;
 import io.github.devinx3.kt.core.CommandRunner;
-import io.github.devinx3.kt.core.CtrlC;
+import io.github.devinx3.kt.core.KtCommand;
+import io.github.devinx3.kt.core.KtEventBus;
 import io.github.devinx3.kt.core.ServiceStore;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -13,10 +15,9 @@ import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
-import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.ToggleButton;
-import javafx.scene.input.MouseEvent;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -24,349 +25,319 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.Charset;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 /**
- * 服务面板：标题行（服务 + 新增）+ 服务列表（每行 服务名 : 端口 + mesh/recover/stop/修改/删除/置顶 按钮靠右）
- * + 底部控制台（显示选中服务的输出）。由原"服务"与"Mesh/Recover"两个面板合并而来。
+ * 服务面板：每服务一个独立 CommandRunner。
+ * 服务名 → runner 正向映射（执行/终止），runner → 服务名 反向映射（事件按 source 归属）。
  */
 public class ServicePanel implements MenuPanel {
 
-    // STATUS_CONTROL_C_EXIT = 0xC000013A：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
-    private static final int STATUS_CONTROL_C_EXIT = -1073741510;
+    private final ToggleButton button = new ToggleButton("服务");
+    private final VBox pane = new VBox(10);
 
-    private final ToggleButton btn = new ToggleButton("服务");
-    private final VBox serviceListBox = new VBox(5);         // 服务列表（每行一个服务，点击选中）
-    private final Label consoleTitle = new Label("控制台");  // 底部控制台标题（显示当前服务名）
-    private final StackPane consoleArea = new StackPane();   // 底部控制台容器
-    private final ConsoleArea fallbackConsole = new ConsoleArea(); // 兜底控制台（未选中服务时）
-    private final VBox pane = new VBox(5);
     private final ServiceStore store;
+    private final KtEventBus bus;
 
-    private final Map<String, Process> serviceProcesses = new ConcurrentHashMap<>();  // 服务名 → 命令进程
-    private final Map<String, String> serviceCommands = new ConcurrentHashMap<>();    // 服务名 → 当前执行的命令（mesh/recover）
-    private final Map<String, Label> serviceNameLabels = new ConcurrentHashMap<>();   // 服务名 → 名称 Label（mesh 成功时绿色加粗）
-    private final Map<String, Button[]> serviceActionButtons = new ConcurrentHashMap<>(); // 服务名 → [mesh, recover, stop, 修改, 删除, 置顶] 按钮（状态联动）
-    private final Map<String, ConsoleArea> serviceConsoles = new ConcurrentHashMap<>(); // 服务名 → 独立控制台
-    private final Map<String, Thread[]> serviceReaderThreads = new ConcurrentHashMap<>(); // 服务名 → [stdout, stderr] 读取线程（stop 时等待剩余输出排空）
-    private final Set<String> meshSuccessServices = ConcurrentHashMap.newKeySet();  // mesh 成功的服务（服务名绿色加粗）
-    private String selectedService;                      // 当前选中的服务（决定底部控制台显示内容）
+    // 每服务独立执行器（服务名 → runner）及其反向映射（事件 source → 服务名）
+    private final ConcurrentHashMap<String, CommandRunner> serviceRunners = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<CommandRunner, String> runnerToService = new ConcurrentHashMap<>();
 
-    public ServicePanel(ServiceStore store) {
+    // UI 映射
+    private final VBox serviceListBox = new VBox(2);
+    private final Label consoleTitle = new Label("控制台");
+    private final StackPane consoleArea = new StackPane();
+    private final ConsoleArea fallbackConsole = new ConsoleArea();
+
+    private final ConcurrentHashMap<String, Label> serviceNameLabels = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, HBox> serviceActionButtons = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConsoleArea> serviceConsoles = new ConcurrentHashMap<>();
+
+    /** mesh 成功的服务集合 */
+    private final ConcurrentLinkedHashSet meshSuccessServices = new ConcurrentLinkedHashSet();
+
+    private String selectedService = null;
+
+    // 服务数据变更回调（主页刷新用）
+    private Runnable onServicesChanged;
+
+    /** 注册服务列表变更通知（如主页刷新） */
+    public void setOnServicesChanged(Runnable onServicesChanged) {
+        this.onServicesChanged = onServicesChanged;
+    }
+
+    // 按钮引用缓存（用于 updateActionButtons）
+    private final ConcurrentHashMap<String, Button[]> serviceButtons = new ConcurrentHashMap<>();
+
+    public ServicePanel(ServiceStore store, KtEventBus bus) {
         this.store = store;
+        this.bus = bus;
 
-        // 标题行：全局操作（新增）放在最上边
+        // 标题行
         Button addBtn = new Button("新增");
-        addBtn.setOnAction(e -> showAddServiceDialog());
+        addBtn.setOnAction(e -> showServiceDialog(null, null));
         HBox titleRow = new HBox(10, new Label("服务"), addBtn);
 
-        // 服务列表：每行按钮靠右（行内操作，无需固定宽度）
-        ScrollPane listScroll = new ScrollPane(serviceListBox);
-        listScroll.setFitToWidth(true);
-        listScroll.setPrefHeight(280);  // 列表固定高度，剩余空间留给底部控制台
-        HBox body = new HBox(listScroll);
-        HBox.setHgrow(listScroll, Priority.ALWAYS);
+        // 服务列表
+        ScrollPane scrollPane = new ScrollPane(serviceListBox);
+        scrollPane.setFitToWidth(true);
+        scrollPane.setPrefHeight(155);
 
-        // 底部控制台：默认显示兜底控制台，选中服务后显示该服务的独立控制台
+        // 底部控制台
         consoleArea.getChildren().add(fallbackConsole.getListView());
-        consoleTitle.setStyle("-fx-text-fill: #888888;");
-        pane.getChildren().addAll(titleRow, body, consoleTitle, consoleArea);
+
+        pane.getChildren().addAll(titleRow, scrollPane, consoleTitle, consoleArea);
         VBox.setVgrow(consoleArea, Priority.ALWAYS);
+
+        // 订阅事件：只响应本面板服务 runner 的事件（按 source 归属过滤）
+        bus.subscribe(CommandEvent.Started.class, event -> {
+            if (runnerToService.containsKey(event.source())) {
+                updateActionButtons();
+            }
+        });
+
+        bus.subscribe(CommandEvent.Completed.class, event -> {
+            if (runnerToService.containsKey(event.source())) {
+                updateActionButtons();
+                updateMenuButton();
+            }
+        });
+
+        bus.subscribe(CommandEvent.Failed.class, event -> {
+            if (runnerToService.containsKey(event.source())) {
+                updateActionButtons();
+                updateMenuButton();
+            }
+        });
+
+        bus.subscribe(CommandEvent.Success.class, event -> {
+            String service = runnerToService.get(event.source());
+            if (service != null && event.command() == KtCommand.MESH) {
+                markMeshSuccess(service);
+            }
+        });
     }
 
-    @Override
-    public ToggleButton getButton() {
-        return btn;
+    // ---- 命令生命周期 ----
+
+    /** 获取或创建服务的独立执行器 */
+    private CommandRunner runnerFor(String service) {
+        return serviceRunners.computeIfAbsent(service, s -> {
+            CommandRunner runner = new CommandRunner(bus);
+            runnerToService.put(runner, s);
+            return runner;
+        });
     }
 
-    @Override
-    public Node getPane() {
-        return pane;
-    }
-
-    /**
-     * 刷新服务列表（每行：服务名 : 端口 + 修改/删除/置顶/mesh/recover/stop 按钮靠右，点击行选中该服务）
-     */
-    public void refreshServices() {
-        Map<String, String> services = store.list();
-        serviceListBox.getChildren().clear();
-        serviceNameLabels.clear();
-        serviceActionButtons.clear();
-        serviceConsoles.clear();
-        serviceReaderThreads.clear();
-        for (Map.Entry<String, String> e : services.entrySet()) {
-            final String service = e.getKey();
-            final String port = e.getValue();
-            Label nameLabel = new Label(service + " : " + port);
-            Button editBtn = new Button("修改");
-            Button delBtn = new Button("删除");
-            Button pinBtn = new Button("置顶");
-            Button meshBtn = new Button("mesh");
-            Button recoverBtn = new Button("recover");
-            Button stopBtn = new Button("stop");
-            editBtn.setOnAction(ev -> showServiceDialog(service, port));
-            delBtn.setOnAction(ev -> deleteService(service));
-            pinBtn.setOnAction(ev -> pinService(service));
-            meshBtn.setOnAction(ev -> startServiceCommand(service, port, "mesh"));
-            recoverBtn.setOnAction(ev -> startServiceCommand(service, port, "recover"));
-            stopBtn.setOnAction(ev -> stopService(service));
-            // 按钮组右对齐：中间用 spacer 撑满
-            Region spacer = new Region();
-            HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox row = new HBox(5, nameLabel, spacer, meshBtn, recoverBtn, stopBtn, editBtn, delBtn, pinBtn);
-            // 行文字垂直居中，左侧留一点间距
-            row.setAlignment(Pos.CENTER_LEFT);
-            row.setPadding(new Insets(0, 0, 0, 6));
-            // 点击行任意位置（含按钮）选中该服务，底部控制台切换为其输出
-            row.addEventFilter(MouseEvent.MOUSE_CLICKED, ev -> selectService(service));
-            serviceNameLabels.put(service, nameLabel);
-            serviceActionButtons.put(service, new Button[]{meshBtn, recoverBtn, stopBtn, editBtn, delBtn, pinBtn});
-            // 每个服务独立的控制台
-            serviceConsoles.put(service, new ConsoleArea());
-            serviceListBox.getChildren().add(row);
+    /** 移除服务执行器（服务删除时调用） */
+    private void removeRunner(String service) {
+        CommandRunner runner = serviceRunners.remove(service);
+        if (runner != null) {
+            runnerToService.remove(runner);
+            runner.shutdown();
         }
-        // 选中服务已被删除时清除选中；否则保持选中并切换到底部控制台
-        if (selectedService != null && !services.containsKey(selectedService)) {
-            selectedService = null;
+    }
+
+    /** 获取或创建服务独立控制台 */
+    private ConsoleArea serviceConsole(String service) {
+        return serviceConsoles.computeIfAbsent(service, k -> new ConsoleArea());
+    }
+
+    /** 开始服务命令（mesh 或 recover） */
+    private void startServiceCommand(KtCommand cmd, String service, String port) {
+        CommandRunner runner = runnerFor(service);
+        if (runner.isActive()) {
+            serviceConsole(service).append(
+                    Ui.timestamp() + " " + service + " 的命令正在执行中，请先点击 stop 终止", false);
+            return;
         }
-        if (selectedService != null) {
-            selectService(selectedService);
+        updateActionButtons();
+        switch (cmd) {
+            case MESH -> runner.runCommand(serviceConsole(service), cmd, service, "--expose", port);
+            case RECOVER -> runner.runCommand(serviceConsole(service), cmd, service);
+            default -> runner.runCommand(serviceConsole(service), cmd);
+        }
+    }
+
+    /** 停止服务命令 */
+    private void stopService(String service) {
+        CommandRunner runner = serviceRunners.get(service);
+        if (runner == null || !runner.isActive()) {
+            serviceConsole(service).append(Ui.timestamp() + " " + service + " 未在运行", false);
+            return;
+        }
+        serviceConsole(service).append(Ui.timestamp() + " 已发送终止信号: " + service, false);
+        meshSuccessServices.remove(service);
+        updateServiceRowStyle(service);
+        updateMenuButton();
+        runner.terminate();
+    }
+
+    /** mesh 成功标记 */
+    private void markMeshSuccess(String service) {
+        meshSuccessServices.add(service);
+        updateServiceRowStyle(service);
+        updateMenuButton();
+    }
+
+    // ---- 按钮状态机 ----
+
+    private void updateActionButtons() {
+        for (String service : store.list().keySet()) {
+            Button[] btns = serviceButtons.get(service);
+            if (btns == null) continue;
+            // btns: [mesh, recover, stop, edit, del, pin]
+            CommandRunner runner = serviceRunners.get(service);
+            boolean running = runner != null && runner.isActive();
+            boolean meshOk = meshSuccessServices.contains(service);
+
+            btns[0].setDisable(running || meshOk); // mesh
+            btns[1].setDisable(running);            // recover
+            btns[2].setDisable(!running && !meshOk); // stop
+            btns[3].setDisable(running);            // edit
+            btns[4].setDisable(running);            // delete
+            // pin always enabled
+        }
+    }
+
+    private void updateServiceRowStyle(String service) {
+        Label nameLabel = serviceNameLabels.get(service);
+        if (nameLabel == null) return;
+
+        StringBuilder style = new StringBuilder();
+        if (service.equals(selectedService)) {
+            style.append("-fx-background-color: #d0e8ff;");
+        }
+        if (meshSuccessServices.contains(service)) {
+            style.append("-fx-text-fill: #28a745; -fx-font-weight: bold;");
+        }
+        nameLabel.setStyle(style.length() > 0 ? style.toString() : null);
+    }
+
+    private void updateSelectionStyle() {
+        for (String service : store.list().keySet()) {
+            updateServiceRowStyle(service);
+        }
+    }
+
+    private void updateMenuButton() {
+        int n = meshSuccessServices.size();
+        if (n > 0) {
+            button.setText("服务 (" + n + ")");
+            button.setStyle("-fx-text-fill: #28a745; -fx-font-weight: bold;");
         } else {
-            consoleTitle.setText("控制台");
-            consoleArea.getChildren().clear();
+            button.setText("服务");
+            button.setStyle(null);
+        }
+    }
+
+    private void selectService(String service) {
+        this.selectedService = service;
+        consoleTitle.setText(service != null ? service : "控制台");
+        consoleArea.getChildren().clear();
+        if (service != null) {
+            consoleArea.getChildren().add(serviceConsole(service).getListView());
+        } else {
             consoleArea.getChildren().add(fallbackConsole.getListView());
         }
-        // 列表重建后恢复 mesh 成功服务的绿色加粗字体与按钮状态
-        for (String s : meshSuccessServices) {
-            updateServiceRowStyle(s);
-        }
-        updateSelectionStyle();
-        updateActionButtons();
-        updateMenuButton();  // 同步顶部按钮的绿色加粗与个数
-    }
-
-    /**
-     * 选中服务：底部控制台切换到该服务的独立控制台
-     */
-    private void selectService(String service) {
-        selectedService = service;
-        consoleTitle.setText(service);
-        consoleArea.getChildren().clear();
-        ConsoleArea console = serviceConsoles.get(service);
-        consoleArea.getChildren().add(console != null ? console.getListView() : fallbackConsole.getListView());
         updateSelectionStyle();
         updateActionButtons();
     }
 
-    /**
-     * 更新列表行的选中样式：选中的行浅蓝背景，mesh 成功的服务名绿色加粗
-     */
-    private void updateSelectionStyle() {
-        for (Map.Entry<String, Label> e : serviceNameLabels.entrySet()) {
-            Label l = e.getValue();
-            String style = meshSuccessServices.contains(e.getKey())
-                    ? "-fx-text-fill: #28a745; -fx-font-weight: bold; " : "";
-            if (e.getKey().equals(selectedService)) {
-                style += "-fx-background-color: #d0e8ff;";
-            }
-            l.setStyle(style);
-        }
-    }
+    // ---- 增删改置顶 ----
 
-    /**
-     * 更新服务行样式：mesh 成功后服务名绿色加粗，同时刷新该行按钮状态
-     */
-    private void updateServiceRowStyle(String service) {
-        updateSelectionStyle();
-        updateRowButtons(service);
-    }
-
-    /**
-     * 更新所有服务行的按钮状态（mesh 成功后禁用 mesh；命令执行中禁用 mesh/recover/修改/删除；
-     * stop 仅在运行或 mesh 成功后可用）
-     */
-    private void updateActionButtons() {
-        for (String service : serviceActionButtons.keySet()) {
-            updateRowButtons(service);
-        }
-    }
-
-    /**
-     * 更新单个服务行按钮状态：[mesh, recover, stop, 修改, 删除] 按运行状态联动，置顶始终可用；
-     * 命令执行中不允许修改/删除，stop 后恢复
-     */
-    private void updateRowButtons(String service) {
-        Button[] btns = serviceActionButtons.get(service);
-        if (btns == null) {
-            return;
-        }
-        boolean running = serviceCommands.containsKey(service);
-        boolean meshOk = meshSuccessServices.contains(service);
-        btns[0].setDisable(running || meshOk);   // [0] = mesh：运行中或已成功后禁用
-        btns[1].setDisable(running);             // [1] = recover：运行中禁用
-        btns[2].setDisable(!running && !meshOk); // [2] = stop：仅在运行中或 mesh 成功后可用
-        btns[3].setDisable(running);             // [3] = 修改：运行中禁用，stop 后恢复
-        btns[4].setDisable(running);             // [4] = 删除：运行中禁用，stop 后恢复
-    }
-
-    /**
-     * 更新顶部"服务"按钮：存在 mesh 成功的绿色服务时，按钮绿色加粗并显示服务个数
-     */
-    private void updateMenuButton() {
-        int count = meshSuccessServices.size();
-        if (count > 0) {
-            btn.setText("服务 (" + count + ")");
-            btn.setStyle("-fx-text-fill: #28a745; -fx-font-weight: bold;");
-        } else {
-            btn.setText("服务");
-            btn.setStyle("");
-        }
-    }
-
-    /**
-     * 命令状态联动（由 CommandRunner 回调）：恢复服务面板按钮的可用状态
-     */
-    public void updateServiceState() {
-        btn.setDisable(false);
-        updateActionButtons();
-    }
-
-    /**
-     * mesh 运行中的服务集合（退出确认用）
-     */
-    public Set<String> getActiveMeshServices() {
-        return meshSuccessServices;
-    }
-
-    /**
-     * 正在运行命令的服务（服务名 → 命令 mesh/recover），主页展示用
-     */
-    public Map<String, String> getRunningServices() {
-        return new LinkedHashMap<>(serviceCommands);
-    }
-
-    /**
-     * 执行服务列表第一个服务的 mesh（主页"一键启动"调用，等同点击该服务行的 mesh 按钮）；
-     * 无服务、运行中或已 mesh 成功时不执行
-     */
-    public void startFirstServiceMesh() {
-        Map<String, String> services = store.list();
-        if (services.isEmpty()) {
-            return;
-        }
-        Map.Entry<String, String> first = services.entrySet().iterator().next();
-        String service = first.getKey();
-        String port = first.getValue();
-        // 与 mesh 按钮禁用条件一致：运行中或已成功后不再执行
-        if (serviceCommands.containsKey(service) || meshSuccessServices.contains(service)) {
-            return;
-        }
-        startServiceCommand(service, port, "mesh");
-    }
-
-    /**
-     * 停止所有正在运行的服务命令（mesh/recover），退出确认后调用
-     */
-    public void stopAllActiveServices() {
-        for (String service : new ArrayList<>(serviceProcesses.keySet())) {
-            stopService(service);
-        }
-    }
-
-    private void showAddServiceDialog() {
-        showServiceDialog(null, null);
-    }
-
-    /**
-     * 服务弹窗通用逻辑：新增（oldName 为空）或修改（预填并更新）。
-     * 校验失败（如端口为空）时弹框不关闭：提示后重新弹出，保留已输入内容继续修改。
-     */
     private void showServiceDialog(String oldName, String oldPort) {
-        String currentName = oldName == null ? "" : oldName;
-        String currentPort = oldPort == null ? "" : oldPort;
+        boolean isEdit = oldName != null;
+
         while (true) {
             Dialog<ButtonType> dialog = new Dialog<>();
-            dialog.setTitle(oldName == null ? "新增服务" : "修改服务");
-            TextField nameField = new TextField(currentName);
-            TextField portField = new TextField(currentPort);
+            Ui.initOwner(dialog);
+            dialog.setTitle(isEdit ? "修改服务" : "新增服务");
+            dialog.setHeaderText(null);
+
+            ButtonType saveButtonType = new ButtonType("保存", ButtonBar.ButtonData.OK_DONE);
+            dialog.getDialogPane().getButtonTypes().addAll(saveButtonType, ButtonType.CANCEL);
+
+            GridPane grid = new GridPane();
+            grid.setHgap(10);
+            grid.setVgap(10);
+            grid.setPadding(new Insets(20, 150, 10, 10));
+
+            TextField nameField = new TextField();
             nameField.setPromptText("服务名（必填）");
+            if (oldName != null) nameField.setText(oldName);
+
+            TextField portField = new TextField();
             portField.setPromptText("端口（必填）");
-            GridPane gp = new GridPane();
-            gp.setHgap(10);
-            gp.setVgap(10);
-            gp.add(new Label("服务名:"), 0, 0);
-            gp.add(nameField, 1, 0);
-            gp.add(new Label("端口:"), 0, 1);
-            gp.add(portField, 1, 1);
-            dialog.getDialogPane().setContent(gp);
-            ButtonType saveType = new ButtonType("保存", ButtonBar.ButtonData.OK_DONE);
-            dialog.getDialogPane().getButtonTypes().addAll(saveType, ButtonType.CANCEL);
-            // 取消或关闭弹框：终止操作
-            if (dialog.showAndWait().map(t -> t != saveType).orElse(true)) {
+            if (oldPort != null) portField.setText(oldPort);
+
+            grid.add(new Label("服务名:"), 0, 0);
+            grid.add(nameField, 1, 0);
+            grid.add(new Label("端口:"), 0, 1);
+            grid.add(portField, 1, 1);
+
+            dialog.getDialogPane().setContent(grid);
+
+            // 请求焦点
+            Platform.runLater(nameField::requestFocus);
+
+            Optional<ButtonType> result = dialog.showAndWait();
+            if (result.isEmpty() || result.get() == ButtonType.CANCEL) {
                 return;
             }
-            currentName = nameField.getText().trim();
-            currentPort = portField.getText().trim();
-            if (currentName.isEmpty()) {
+
+            String newName = nameField.getText().trim();
+            String newPort = portField.getText().trim();
+
+            if (newName.isEmpty()) {
                 Ui.showAlert("服务名必填");
-                continue; // 重新弹出弹框继续修改
+                continue;
             }
-            if (currentPort.isEmpty()) {
+            if (newPort.isEmpty()) {
                 Ui.showAlert("端口不允许为空");
                 continue;
             }
-            if (!Ui.isValidPort(currentPort)) {
+            if (!Ui.isValidPort(newPort)) {
                 Ui.showAlert("端口必须是 0-65535 之间的整数");
                 continue;
             }
+
             Map<String, String> services = store.listForUpdate();
-            if (oldName == null) {
-                // 新增：服务名必须唯一
-                if (services.containsKey(currentName)) {
-                    Ui.showAlert("服务名已存在: " + currentName);
-                    continue;
-                }
-            } else {
-                // 修改：改名时不能与其他服务重名
-                if (!oldName.equals(currentName) && services.containsKey(currentName)) {
-                    Ui.showAlert("服务名已存在: " + currentName);
-                    continue;
-                }
+
+            // 检查重名
+            if (isEdit) {
                 services.remove(oldName);
             }
-            services.put(currentName, currentPort);
-            store.save(services);
-            // 修改的是当前选中服务时，改名后保持选中
-            if (oldName != null && oldName.equals(selectedService)) {
-                selectedService = currentName;
+            if (services.containsKey(newName)) {
+                Ui.showAlert("服务名已存在: " + newName);
+                continue;
             }
+
+            services.put(newName, newPort);
+            store.save(services);
+
+            if (isEdit && oldName.equals(selectedService)) {
+                selectedService = newName;
+            }
+
             refreshServices();
             return;
         }
     }
 
-    /**
-     * 删除指定服务（二次确认后执行）
-     */
     private void deleteService(String name) {
-        // 二次确认：防止误删
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
-        confirm.setTitle("确认删除");
-        confirm.setHeaderText(null);
-        confirm.setContentText("确定要删除服务 " + name + " 吗？");
-        if (confirm.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
-            return; // 用户取消，不删除
-        }
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("确认删除");
+        alert.setHeaderText(null);
+        alert.setContentText("确定要删除服务 " + name + " 吗？");
+        Ui.initOwner(alert);
+        Optional<ButtonType> result = alert.showAndWait();
+        if (result.isEmpty() || result.get() != ButtonType.OK) return;
+
         Map<String, String> services = store.listForUpdate();
         if (!services.containsKey(name)) {
             Ui.showAlert("服务不存在: " + name);
@@ -374,163 +345,202 @@ public class ServicePanel implements MenuPanel {
         }
         services.remove(name);
         store.save(services);
-        // 删除的是当前选中服务时，清除选中状态
+
+        removeRunner(name);
+
         if (name.equals(selectedService)) {
             selectedService = null;
         }
         refreshServices();
     }
 
-    /**
-     * 将指定服务置顶（移到列表最前面）并保存
-     */
     private void pinService(String name) {
         Map<String, String> services = store.listForUpdate();
-        String port = services.remove(name);
-        if (port == null) {
+        if (!services.containsKey(name)) {
             Ui.showAlert("服务不存在: " + name);
             return;
         }
-        Map<String, String> reordered = new LinkedHashMap<>();
-        reordered.put(name, port);   // 置顶服务放最前
-        reordered.putAll(services);  // 其余保持原顺序
+        // 取出该项放最前
+        String port = services.remove(name);
+        LinkedHashMap<String, String> reordered = new LinkedHashMap<>();
+        reordered.put(name, port);
+        reordered.putAll(services);
         store.save(reordered);
         refreshServices();
     }
 
-    /**
-     * 获取服务的控制台（不存在时兜底用 fallbackConsole）
-     */
-    private ConsoleArea serviceConsole(String service) {
-        ConsoleArea c = serviceConsoles.get(service);
-        return c != null ? c : fallbackConsole;
-    }
+    // ---- refreshServices ----
 
-    /**
-     * 启动指定服务的 mesh/recover 命令（独立线程，输出到对应服务控制台）
-     */
-    private void startServiceCommand(String service, String port, String cmd) {
-        if (serviceCommands.containsKey(service)) {
-            // 命令执行中：不允许再次执行（含 mesh/recover 互斥），需先点击 stop 终止
-            serviceConsole(service).append(Ui.timestamp() + " " + service + " 的 " + serviceCommands.get(service)
-                    + " 命令正在执行中，请先点击 stop 终止", false);
-            return;
-        }
-        updateActionButtons(); // 命令执行期间禁用该服务的 mesh/recover 按钮
-        Thread t = new Thread(() -> {
-            try {
-                List<String> command = new ArrayList<>();
-                command.add("ktctl");
-                command.add(cmd);
-                command.add(service);
-                if ("mesh".equals(cmd)) {
-                    command.add("--expose");
-                    command.add(port);
-                }
-                ProcessBuilder pb = new ProcessBuilder(command);
-                Process process = pb.start();
-                serviceProcesses.put(service, process);
-                serviceCommands.put(service, cmd);
-                String charsetName = System.getProperty("os.name").toLowerCase().contains("win") ? "GBK" : "UTF-8";
-                Platform.runLater(() -> serviceConsole(service).append(
-                        Ui.timestamp() + " > 执行: " + String.join(" ", command), false));
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), Charset.forName(charsetName)));
-                     BufferedReader errorReader = new BufferedReader(
-                             new InputStreamReader(process.getErrorStream(), Charset.forName(charsetName)))) {
-                    // mesh 命令成功（出现 "Now you can access your service by header"）时服务名变绿并禁用 mesh 按钮
-                    String keyword = "mesh".equals(cmd) ? "Now you can access your service by header" : null;
-                    Consumer<String> onSuccess = "mesh".equals(cmd) ? line -> markMeshSuccess(service) : null;
-                    Thread outT = new Thread(() -> CommandRunner.readOutput(reader, serviceConsole(service).getListView(), false, null, keyword, onSuccess));
-                    Thread errT = new Thread(() -> CommandRunner.readOutput(errorReader, serviceConsole(service).getListView(), true, null, keyword, onSuccess));
-                    serviceReaderThreads.put(service, new Thread[]{outT, errT});
-                    outT.start();
-                    errT.start();
-                    int exitCode = process.waitFor();
-                    outT.join();
-                    errT.join();
-                    Platform.runLater(() -> {
-                        // 0xC000013A = STATUS_CONTROL_C_EXIT：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
-                        if (exitCode == STATUS_CONTROL_C_EXIT) {
-                            serviceConsole(service).append(
-                                    Ui.timestamp() + " " + cmd + " " + service + " 已通过 Ctrl+C 正常终止", false);
-                        } else {
-                            serviceConsole(service).append(
-                                    Ui.timestamp() + " " + cmd + " " + service + " 结束，退出码: " + exitCode, exitCode != 0);
-                        }
-                        updateActionButtons();  // 命令结束后恢复按钮状态
-                    });
-                }
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    serviceConsole(service).append(
-                            Ui.timestamp() + " " + cmd + " " + service + " 启动失败: " + e.getMessage(), true);
-                    updateActionButtons();
-                });
-            } finally {
-                serviceProcesses.remove(service);
-                serviceCommands.remove(service);
-                serviceReaderThreads.remove(service);
-            }
-        });
-        t.setDaemon(true);
-        t.start();
-    }
+    /** 重建列表 */
+    public void refreshServices() {
+        serviceListBox.getChildren().clear();
+        serviceNameLabels.clear();
+        serviceActionButtons.clear();
+        serviceButtons.clear();
+        // 注意：不清除 serviceConsoles，保留控制台历史
 
-    /**
-     * 终止指定服务的命令进程
-     */
-    private void stopService(String service) {
-        Process p = serviceProcesses.get(service);
-        if (p == null) {
-            serviceConsole(service).append(Ui.timestamp() + " " + service + " 未在运行", false);
-            return;
+        Map<String, String> services = store.list();
+        for (Map.Entry<String, String> entry : services.entrySet()) {
+            String service = entry.getKey();
+            String port = entry.getValue();
+            serviceListBox.getChildren().add(createServiceRow(service, port));
         }
-        serviceConsole(service).append(Ui.timestamp() + " 已发送终止信号: " + service, false);
-        // 立即从运行表移除并清除 mesh 成功状态：迟到的成功回调不再变绿，服务名与按钮恢复默认状态
-        serviceProcesses.remove(service);
-        meshSuccessServices.remove(service);
-        updateServiceRowStyle(service);
-        updateMenuButton();  // 顶部按钮恢复默认（无绿色服务时）
-        // 仅 mesh 命令需要优雅退出（发送真正的 Ctrl+C）；recover 直接终止即可
-        if ("mesh".equals(serviceCommands.get(service))) {
-            if (!CtrlC.send(p)) {
-                p.destroy();
-            }
+
+        // 恢复选中
+        if (selectedService != null && services.containsKey(selectedService)) {
+            selectService(selectedService);
         } else {
-            p.destroy();
+            selectedService = null;
+            consoleTitle.setText("控制台");
+            consoleArea.getChildren().clear();
+            consoleArea.getChildren().add(fallbackConsole.getListView());
         }
-        Thread t = new Thread(() -> {
-            try {
-                // 等待输出读取线程把进程已产生的剩余输出读完并打印（如 mesh/recover 的结束日志），
-                // 之后再强制终止兜底，避免 stop 后输出丢失
-                Thread[] readers = serviceReaderThreads.get(service);
-                if (readers != null) {
-                    for (Thread r : readers) {
-                        r.join(3000);
-                    }
-                }
-                if (!p.waitFor(3, TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
-                }
-            } catch (InterruptedException e) {
-                p.destroyForcibly();
-            }
-        });
-        t.setDaemon(true);
-        t.start();
+
+        // 恢复 mesh 成功样式
+        for (String service : meshSuccessServices) {
+            updateServiceRowStyle(service);
+        }
+        updateSelectionStyle();
+        updateActionButtons();
+        updateMenuButton();
+
+        // 通知外部（主页）服务列表已变化
+        if (onServicesChanged != null) {
+            onServicesChanged.run();
+        }
     }
 
-    /**
-     * mesh 命令成功：服务名变绿加粗，并禁用该服务的 mesh 按钮
-     */
-    private void markMeshSuccess(String service) {
-        // 已 stop 的服务不再变绿：避免终止后迟到的成功输出（异步回调）把服务名与按钮重新上色
-        if (!serviceProcesses.containsKey(service)) {
+    private HBox createServiceRow(String service, String port) {
+        Label nameLabel = new Label(service + " : " + port);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button meshBtn = new Button("mesh");
+        Button recoverBtn = new Button("recover");
+        Button stopBtn = new Button("stop");
+        Button editBtn = new Button("修改");
+        Button delBtn = new Button("删除");
+        Button pinBtn = new Button("置顶");
+
+        // 缓存按钮引用
+        serviceButtons.put(service, new Button[]{meshBtn, recoverBtn, stopBtn, editBtn, delBtn, pinBtn});
+        serviceNameLabels.put(service, nameLabel);
+
+        // 按钮动作
+        meshBtn.setOnAction(e -> startServiceCommand(KtCommand.MESH, service, port));
+        recoverBtn.setOnAction(e -> startServiceCommand(KtCommand.RECOVER, service, port));
+        stopBtn.setOnAction(e -> stopService(service));
+        editBtn.setOnAction(e -> showServiceDialog(service, port));
+        delBtn.setOnAction(e -> deleteService(service));
+        pinBtn.setOnAction(e -> pinService(service));
+
+        HBox row = new HBox(5, nameLabel, spacer, meshBtn, recoverBtn, stopBtn, editBtn, delBtn, pinBtn);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.setPadding(new Insets(0, 0, 0, 6));
+
+        // 行上注册 MOUSE_CLICKED 事件过滤器 → selectService
+        row.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_CLICKED, ev ->
+                selectService(service));
+
+        serviceActionButtons.put(service, row);
+        return row;
+    }
+
+    // ---- 公开方法 ----
+
+    public void updateServiceState() {
+        button.setDisable(false);
+        updateActionButtons();
+    }
+
+    public LinkedHashSet<String> getActiveMeshServices() {
+        return meshSuccessServices.copy();
+    }
+
+    /** 运行中的服务命令映射 */
+    public LinkedHashMap<String, String> getRunningServices() {
+        LinkedHashMap<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, CommandRunner> entry : serviceRunners.entrySet()) {
+            CommandRunner runner = entry.getValue();
+            if (runner.isActive() && runner.activeCommand() != null) {
+                KtCommand cmd = runner.activeCommand();
+                if (cmd == KtCommand.MESH || cmd == KtCommand.RECOVER) {
+                    result.put(entry.getKey(), cmd == KtCommand.MESH ? "mesh" : "recover");
+                }
+            }
+        }
+        return result;
+    }
+
+    /** 启动第一个服务 mesh（主页"一键启动"调用） */
+    public void startFirstServiceMesh() {
+        Map<String, String> services = store.list();
+        if (services.isEmpty()) return;
+        Map.Entry<String, String> first = services.entrySet().iterator().next();
+        String service = first.getKey();
+        String port = first.getValue();
+        CommandRunner runner = serviceRunners.get(service);
+        if ((runner != null && runner.isActive()) || meshSuccessServices.contains(service)) {
             return;
         }
-        meshSuccessServices.add(service);
-        updateServiceRowStyle(service);
-        updateMenuButton();  // 顶部按钮绿色加粗并显示个数
+        startServiceCommand(KtCommand.MESH, service, port);
+    }
+
+    /** 停止所有活动服务（退出确认后调用） */
+    public void stopAllActiveServices() {
+        for (String service : serviceRunners.keySet()) {
+            stopService(service);
+        }
+    }
+
+    /** 退出清理：关闭全部服务执行器 */
+    public void shutdown() {
+        for (CommandRunner runner : serviceRunners.values()) {
+            runner.shutdown();
+        }
+        serviceRunners.clear();
+        runnerToService.clear();
+    }
+
+    @Override
+    public ToggleButton getButton() {
+        return button;
+    }
+
+    @Override
+    public Node getPane() {
+        return pane;
+    }
+
+    // ---- 内部工具类 ----
+
+    /** 并发安全的 LinkedHashSet */
+    private static class ConcurrentLinkedHashSet implements Iterable<String> {
+        private final LinkedHashSet<String> set = new LinkedHashSet<>();
+
+        synchronized boolean add(String s) {
+            return set.add(s);
+        }
+
+        synchronized boolean remove(String s) {
+            return set.remove(s);
+        }
+
+        synchronized boolean contains(String s) {
+            return set.contains(s);
+        }
+
+        synchronized int size() {
+            return set.size();
+        }
+
+        synchronized LinkedHashSet<String> copy() {
+            return new LinkedHashSet<>(set);
+        }
+
+        @Override
+        public synchronized java.util.Iterator<String> iterator() {
+            return new LinkedHashSet<>(set).iterator();
+        }
     }
 }

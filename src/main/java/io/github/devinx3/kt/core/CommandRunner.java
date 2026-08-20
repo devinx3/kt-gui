@@ -1,227 +1,291 @@
 package io.github.devinx3.kt.core;
 
 import io.github.devinx3.kt.ui.ConsoleArea;
-import io.github.devinx3.kt.ui.ConsoleLine;
 import io.github.devinx3.kt.ui.Ui;
 import javafx.application.Platform;
-import javafx.scene.control.ListView;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * ktctl 命令执行器：负责启动进程、读取输出、收集结果与终止命令。
- * 面板通过 runCommandTo / runCollecting 发起命令，通过回调感知状态变化。
+ * 单会话命令执行器（事件发布者）。
+ * 一个执行器只管理一个 ktctl 进程；每个命令/服务持有独立的 CommandRunner 实例，无 key 概念。
+ * 完整命令行经 {@link KtCommand#command(String...)} 构造，额外参数由调用方以字符串传入。
  */
 public class CommandRunner {
 
-    // STATUS_CONTROL_C_EXIT = 0xC000013A：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
-    private static final int STATUS_CONTROL_C_EXIT = -1073741510;
+    private volatile CommandHandle handle;          // 当前进程句柄，null = 空闲
+    private volatile KtCommand currentCommand;      // 当前执行的命令规格，null = 空闲
+    private final AtomicBoolean active = new AtomicBoolean(false); // 同步防重入（进程启动前即置位）
+    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final KtEventBus bus;
 
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** Ctrl+C 退出码（STATUS_CONTROL_C_EXIT） */
+    private static final int CTRL_C_EXIT_CODE = -1073741510; // 0xC000013A
 
-    private volatile Process currentProcess;  // 当前正在执行的进程，供"终止"按钮使用
-    private volatile String currentCommand;   // 当前执行的命令名（args[0]），用于终止后联动
-
-    private Runnable onStateChanged = () -> {};          // 命令开始/结束时的状态联动（如禁用/恢复 Mesh/Recover）
-    private Consumer<String> onCollectError = msg -> {}; // 收集型命令失败时回调（如配置加载失败提示）
-
-    /**
-     * 命令执行状态变化回调（开始/结束时触发）
-     */
-    public void setOnStateChanged(Runnable onStateChanged) {
-        this.onStateChanged = onStateChanged;
+    public CommandRunner(KtEventBus bus) {
+        this.bus = bus;
     }
 
     /**
-     * 收集型命令（runCollecting）执行异常时的回调
+     * 流式执行：本执行器空闲时启动，占用期间重复调用 → 拒绝并提示。
+     *
+     * @param target    目标控制台
+     * @param cmd       命令规格（决定收集模式/终止方式/成功关键字）
+     * @param cmdOptions 额外参数（如 "show"、"svc"、"--expose"、"8080"）
      */
-    public void setOnCollectError(Consumer<String> onCollectError) {
-        this.onCollectError = onCollectError;
-    }
-
-    /**
-     * 当前是否有命令正在执行
-     */
-    public boolean isBusy() {
-        return currentProcess != null;
-    }
-
-    /**
-     * 执行命令，输出到指定控制台
-     */
-    public void runCommandTo(ListView<ConsoleLine> target, String... args) {
-        runInternal(args, target, null, null, null);
-    }
-
-    /**
-     * 执行命令，输出到指定控制台；输出行出现 successKeyword 时回调 onSuccess（如 connect 成功变绿）
-     */
-    public void runCommandTo(ListView<ConsoleLine> target, String successKeyword, Consumer<String> onSuccess, String... args) {
-        runInternal(args, target, null, successKeyword, onSuccess);
-    }
-
-    /**
-     * 执行命令，收集全部输出行后回调（如 config show）
-     */
-    public void runCollecting(String[] args, Consumer<List<String>> onCollected) {
-        runInternal(args, null, onCollected, null, null);
-    }
-
-    private void runInternal(String[] args, ListView<ConsoleLine> target, Consumer<List<String>> onCollected,
-                             String successKeyword, Consumer<String> onSuccess) {
-        onStateChanged.run(); // 执行期间禁用 Mesh/Recover
-        if (target != null) {
-            ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " > 执行: ktctl " + String.join(" ", args), false));
-        }
-
-        executor.submit(() -> {
-            try {
-                List<String> command = new ArrayList<>();
-                command.add("ktctl");
-                command.addAll(List.of(args));
-
-                ProcessBuilder pb = new ProcessBuilder(command);
-
-                Process process = pb.start();
-                currentProcess = process; // 记录进程，供"终止"按钮使用
-                currentCommand = args.length > 0 ? args[0] : null;
-
-                // 根据操作系统选择字符集，解决中文乱码
-                String charsetName = System.getProperty("os.name").toLowerCase().contains("win") ? "GBK" : "UTF-8";
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), Charset.forName(charsetName)));
-                     BufferedReader errorReader = new BufferedReader(
-                             new InputStreamReader(process.getErrorStream(), Charset.forName(charsetName)))) {
-
-                    List<String> collected = new ArrayList<>();
-                    List<String> errLines = new ArrayList<>();
-
-                    // 并发读取 stdout/stderr，避免单流顺序读取时管道写满导致死锁、输出不全
-                    Thread outReader = new Thread(() -> readOutput(reader, target, false, collected, successKeyword, onSuccess));
-                    Thread errReader = new Thread(() -> readOutput(errorReader, target, true, errLines, successKeyword, onSuccess));
-                    outReader.start();
-                    errReader.start();
-
-                    int exitCode = process.waitFor();
-                    outReader.join();
-                    errReader.join();
-
-                    final List<String> result = onCollected != null ? new ArrayList<>(collected) : null;
-                    // 权限错误以 stderr 内容为准：ktctl 权限失败时退出码可能为 0
-                    final boolean permissionIssue = errLines.stream()
-                            .anyMatch(l -> l.toLowerCase().contains("permission"));
-                    Platform.runLater(() -> {
-                        currentProcess = null;
-                        currentCommand = null;
-                        if (result != null) {
-                            onCollected.accept(result);
-                        }
-                        if (target != null) {
-                            ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 命令完成，退出码: " + exitCode, false));
-                            // 0xC000013A = STATUS_CONTROL_C_EXIT：进程因收到 Ctrl+C/Ctrl+Break 信号退出（用户主动终止，非异常）
-                            if (exitCode == STATUS_CONTROL_C_EXIT) {
-                                ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 已通过 Ctrl+C 正常终止", false));
-                            }
-                            if (permissionIssue) {
-                                // 权限不足：ktctl 需要管理员权限（修改 hosts、创建虚拟网卡等）
-                                ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 权限不足：请以管理员身份运行本程序后重试。", true));
-                            }
-                        }
-                        onStateChanged.run();
-                    });
-                }
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    currentProcess = null;
-                    currentCommand = null;
-                    if (target != null) {
-                        ConsoleArea.appendLine(target, new ConsoleLine(Ui.timestamp() + " 执行异常: " + e.getMessage(), true));
-                    }
-                    // 收集型命令失败时回调（如配置面板提示），避免静默失败
-                    if (onCollected != null) {
-                        onCollectError.accept(e.getMessage());
-                    }
-                    onStateChanged.run();
-                });
-            }
-        });
-    }
-
-
-    public void terminateCurrent() {
-        terminateCurrent(false);
-    }
-
-    /**
-     * 终止当前正在执行的进程：仅 connect 命令发送真正的 Ctrl+C（Windows），其余命令（clean 等）直接 destroy；
-     * 超时未退出则强制终止。面板负责在此前后输出提示信息与联动（如清除连接成功底色）。
-     */
-    public void terminateCurrent(boolean ctrlC) {
-        Process p = currentProcess;
-        if (p == null) {
+    public void runCommand(ConsoleArea target, KtCommand cmd, String... cmdOptions) {
+        // 同步防重入（UI 线程内立即生效）
+        if (!active.compareAndSet(false, true)) {
+            Platform.runLater(() ->
+                    target.append(Ui.timestamp() + " 命令正在执行中，请勿重复点击", false));
             return;
         }
-        if (ctrlC) {
-            if (!CtrlC.send(p)) {
-                p.destroy();
-            }
-        } else {
-            p.destroy();
-        }
+        currentCommand = cmd;
+
+        // 经 KtCommand#command 构造完整命令行（含 ktctl 前缀）
+        List<String> fullCommand = cmd.command(cmdOptions);
+
+        // 先发布 Started 事件（同步派发，订阅者禁用按钮/刷新主页）
+        bus.publish(new CommandEvent.Started(this, cmd));
+
+        // 控制台先追加执行日志
+        Platform.runLater(() ->
+                target.append(Ui.timestamp() + " > 执行: " + String.join(" ", fullCommand), false));
+
+        // 提交后台任务
         executor.submit(() -> {
             try {
-                if (!p.waitFor(3, TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
+                ProcessBuilder pb = new ProcessBuilder(fullCommand);
+                pb.redirectErrorStream(false);
+                Process process = pb.start();
+
+                CommandHandle handle = new CommandHandle(cmd, cmdOptions, process);
+                this.handle = handle;
+
+                // 启动双流读取
+                Thread[] readers = StreamPump.pump(process,
+                        (line, isError) -> {
+                            // 写入控制台（UI 线程）
+                            Platform.runLater(() ->
+                                    target.append(line, isError && ConsoleArea.isErrorLine(line)));
+                            // 收集型写入缓冲
+                            if (cmd.isCollect()) {
+                                handle.collected.add(line);
+                            }
+                            if (isError) {
+                                handle.errLines.add(line);
+                            }
+                        },
+                        cmd.getSuccessKeyword() != null ? (line) -> {
+                            // 成功关键字命中
+                            if (!handle.isStopped() && line.toLowerCase().contains(cmd.getSuccessKeyword().toLowerCase())) {
+                                bus.publish(new CommandEvent.Success(this, cmd, line));
+                            }
+                        } : null
+                );
+                handle.readerThreads[0] = readers[0];
+                handle.readerThreads[1] = readers[1];
+
+                // 等待进程退出
+                int exitCode = handle.waitExit();
+
+                // 等待读取线程结束
+                for (Thread t : handle.readerThreads) {
+                    if (t != null) {
+                        t.join(2000);
+                    }
                 }
+
+                // 统一完成处理
+                handleCompletion(handle, exitCode, target);
+
+            } catch (IOException e) {
+                // 启动异常（如 ktctl 不在 PATH）
+                Platform.runLater(() ->
+                        target.append(Ui.timestamp() + " 执行异常: " + e.getMessage(), true));
+                bus.publish(new CommandEvent.Failed(this, cmd, e.getMessage()));
+                reset();
+                bus.publish(new CommandEvent.Completed(this, cmd, -1, false));
             } catch (InterruptedException e) {
-                p.destroyForcibly();
+                Thread.currentThread().interrupt();
             }
         });
     }
 
     /**
-     * 读取一个输出流的所有行：追加到控制台并收集到 lines（后台线程调用）
+     * 收集式执行：结果经 COLLECTED / FAILED 事件送达，无需回调参数。
+     *
+     * @param cmd       命令规格（决定收集模式/终止方式）
+     * @param cmdOptions 额外参数（如 "show"）
      */
-    public static void readOutput(BufferedReader reader, ListView<ConsoleLine> target,
-                           boolean isError, List<String> lines,
-                           String successKeyword, Consumer<String> onSuccess) {
-        try {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (lines != null) {
-                    lines.add(line);
-                }
-                if (target != null) {
-                    final String out = line;
-                    // 只有 ERROR 级别日志才淡红背景，INFO 等仍用白底
-                    final boolean err = isError && ConsoleArea.isErrorLine(out);
-                    Platform.runLater(() -> ConsoleArea.appendLine(target, new ConsoleLine(out, err)));
-                }
-                // 自定义成功关键字检测（如 connect 成功提示）
-                if (successKeyword != null && onSuccess != null
-                        && line.toLowerCase().contains(successKeyword.toLowerCase())) {
-                    final String match = line;
-                    Platform.runLater(() -> onSuccess.accept(match));
-                }
-            }
-        } catch (IOException e) {
-            // 进程被终止等导致流关闭时忽略
+    public void runCollecting(KtCommand cmd, String... cmdOptions) {
+        // 同步防重入
+        if (!active.compareAndSet(false, true)) {
+            return;
         }
+        currentCommand = cmd;
+
+        // 经 KtCommand#command 构造完整命令行（含 ktctl 前缀）
+        List<String> fullCommand = cmd.command(cmdOptions);
+
+        // 先发布 Started 事件
+        bus.publish(new CommandEvent.Started(this, cmd));
+
+        executor.submit(() -> {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(fullCommand);
+                pb.redirectErrorStream(false);
+                Process process = pb.start();
+
+                CommandHandle handle = new CommandHandle(cmd, cmdOptions, process);
+                this.handle = handle;
+
+                // 启动双流读取（收集型不写控制台，只缓冲）
+                Thread[] readers = StreamPump.pump(process,
+                        (line, isError) -> {
+                            if (!isError) {
+                                handle.collected.add(line);
+                            } else {
+                                handle.errLines.add(line);
+                            }
+                        },
+                        null
+                );
+                handle.readerThreads[0] = readers[0];
+                handle.readerThreads[1] = readers[1];
+
+                int exitCode = handle.waitExit();
+
+                for (Thread t : handle.readerThreads) {
+                    if (t != null) {
+                        t.join(2000);
+                    }
+                }
+
+                // 收集型完成处理
+                if (handle.isStopped()) {
+                    // 用户终止
+                    bus.publish(new CommandEvent.Completed(this, cmd, exitCode, true));
+                } else if (exitCode == 0) {
+                    bus.publish(new CommandEvent.Collected(this, cmd, new ArrayList<>(handle.collected)));
+                    bus.publish(new CommandEvent.Completed(this, cmd, exitCode, false));
+                } else {
+                    String errMsg = handle.errLines.isEmpty() ? "退出码: " + exitCode : String.join("\n", handle.errLines);
+                    bus.publish(new CommandEvent.Failed(this, cmd, errMsg));
+                    bus.publish(new CommandEvent.Completed(this, cmd, exitCode, false));
+                }
+
+                reset();
+
+            } catch (IOException e) {
+                bus.publish(new CommandEvent.Failed(this, cmd, e.getMessage()));
+                reset();
+                bus.publish(new CommandEvent.Completed(this, cmd, -1, false));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
     }
 
     /**
-     * 关闭执行器（应用退出时调用）
+     * 终止当前命令（按 KtCommand 的 TerminateMode 决定 Ctrl+C 或 destroy）。
      */
+    public void terminate() {
+        CommandHandle h = handle;
+        if (h == null) return;
+
+        h.terminate();
+
+        // 3s 未退出 → destroyForcibly（守护线程内等待，不阻塞 UI）
+        Thread forceKillThread = new Thread(() -> {
+            try {
+                boolean exited = processWaitFor(h.process, 3000);
+                if (!exited) {
+                    h.process.destroyForcibly();
+                }
+            } catch (Exception e) {
+                // 忽略
+            }
+        }, "kt-force-kill");
+        forceKillThread.setDaemon(true);
+        forceKillThread.start();
+    }
+
+    /** 当前是否有命令在执行（同步判定，含已提交未启动窗口） */
+    public boolean isActive() {
+        return active.get();
+    }
+
+    /** 当前正在执行的命令规格；空闲时返回 null */
+    public KtCommand activeCommand() {
+        return currentCommand;
+    }
+
+    /** 应用退出：terminate + shutdownNow */
     public void shutdown() {
+        CommandHandle h = handle;
+        if (h != null) {
+            h.terminate();
+            try {
+                h.process.destroyForcibly();
+            } catch (Exception e) {
+                // 忽略
+            }
+        }
+        reset();
         executor.shutdownNow();
+    }
+
+    // ---- 内部方法 ----
+
+    /** 释放占用状态（进程已结束/启动失败后调用） */
+    private void reset() {
+        handle = null;
+        currentCommand = null;
+        active.set(false);
+    }
+
+    private void handleCompletion(CommandHandle handle, int exitCode, ConsoleArea target) {
+        boolean stoppedByUser = handle.isStopped() || exitCode == CTRL_C_EXIT_CODE;
+
+        if (stoppedByUser) {
+            Platform.runLater(() ->
+                    target.append(Ui.timestamp() + " 已通过 Ctrl+C 正常终止", false));
+        } else {
+            boolean isError = exitCode != 0;
+            Platform.runLater(() ->
+                    target.append(Ui.timestamp() + " 命令完成，退出码: " + exitCode, isError));
+        }
+
+        // 释放占用状态
+        reset();
+
+        // 发布 Completed 事件
+        bus.publish(new CommandEvent.Completed(this, handle.command, exitCode, stoppedByUser));
+    }
+
+    /** 等待进程退出，带超时（ms），返回是否已退出 */
+    private boolean processWaitFor(Process process, long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                process.exitValue();
+                return true;
+            } catch (IllegalThreadStateException e) {
+                // 进程尚未退出
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 }
