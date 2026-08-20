@@ -70,6 +70,7 @@
                 <module>${appModule}/${appMainClass}</module>
                 <runtimeImage>${project.build.directory}/image</runtimeImage>
                 <destination>${project.build.directory}/app</destination>
+                <!--  <type>IMAGE</type>-->
 				<type>APP_IMAGE</type>
 				<icon>${project.basedir}/public/favicon.ico</icon>
             </configuration>
