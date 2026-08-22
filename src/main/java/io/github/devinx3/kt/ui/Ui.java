@@ -16,7 +16,7 @@ public final class Ui {
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** 所有 Alert 弹框的 owner（主窗口），由应用启动时注册 */
-    private static Window primaryStage;
+    private static Stage primaryStage;
 
     private Ui() {
     }
@@ -24,6 +24,10 @@ public final class Ui {
     /** 注册主窗口，使所有 Alert 弹框继承其标题栏图标并居中 */
     public static void setPrimaryStage(Stage primaryStage) {
         Ui.primaryStage = primaryStage;
+    }
+
+    public static Stage getPrimaryStage() {
+        return Ui.primaryStage;
     }
 
     /** 给 Alert 设置 owner（已注册时），继承主窗口图标并作为模态子窗口显示 */

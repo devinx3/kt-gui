@@ -9,6 +9,8 @@ import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.ToggleButton;
@@ -16,16 +18,17 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.shape.SVGPath;
+import javafx.stage.Stage;
 import javafx.util.Duration;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 主页/总览面板。
- * 一键启动/全部关闭/状态展示。
+ * 一键启动/全部终止/状态展示。
  */
 public class HomePanel implements MenuPanel {
 
@@ -37,10 +40,13 @@ public class HomePanel implements MenuPanel {
     private final ServiceStore store;
 
     private final Button oneClickStartBtn = new Button("一键启动");
-    private final Button closeAllBtn = new Button("全部关闭");
+    private final Button closeAllBtn = new Button("全部终止");
 
     private final Label connectStateLabel = new Label();
     private final VBox serviceList = new VBox(5);
+
+    /** 心跳失败提示防重标记：单会话仅弹一次 */
+    private final AtomicBoolean heartbeatAlerted = new AtomicBoolean(false);
 
     public HomePanel(ConnectPanel connectPanel, ServicePanel servicePanel,
                      ServiceStore store, KtEventBus bus) {
@@ -84,7 +90,7 @@ public class HomePanel implements MenuPanel {
             handleTimeout(ev -> servicePanel.startFirstServiceMesh(), Duration.millis(1100));
         });
 
-        // 全部关闭
+        // 全部终止
         closeAllBtn.setOnAction(e -> {
             servicePanel.stopAllActiveServices();
             connectPanel.disconnect();
@@ -96,9 +102,63 @@ public class HomePanel implements MenuPanel {
         bus.subscribe(CommandEvent.Success.class, this::refreshListener);
         bus.subscribe(CommandEvent.Completed.class, this::refreshListener);
         bus.subscribe(CommandEvent.Failed.class, this::refreshListener);
+
+        // 心跳失败：监听连接输出 → 弹确认框（单会话防重）
+        bus.subscribe(CommandEvent.Output.class, this::onOutput);
+    }
+
+    /** 连接输出处理：命中心跳失败关键字时弹确认框（单会话仅提示一次） */
+    public void onOutput(CommandEvent event) {
+        if (event.command() != KtCommand.CONNECT) {
+            return;
+        }
+        String line = ((CommandEvent.Output) event).line();
+        if (line == null || !line.contains("Failed to update heart beat")) {
+            return;
+        }
+        if (!heartbeatAlerted.compareAndSet(false, true)) {
+            return;
+        }
+        Platform.runLater(() -> {
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("KT 心跳提醒");
+            alert.setHeaderText(null);
+            alert.setContentText("数据代理通道心跳检查失败\n");
+            Ui.initOwner(alert);
+            alert.setOnShowing(e -> {
+                Stage stage = (Stage) alert.getDialogPane().getScene().getWindow();
+                Stage primaryStage = Ui.getPrimaryStage();
+                if (primaryStage != null) {
+                    // 如果主窗口被意外最小化了，先还原它
+                    if (primaryStage.isIconified()) {
+                        primaryStage.setIconified(false);
+                    }
+                    primaryStage.toFront();
+                }
+                stage.setAlwaysOnTop(true);
+                stage.toFront();
+                stage.requestFocus();
+            });
+            ButtonType confirmType = new ButtonType("终止连接和服务", ButtonBar.ButtonData.OK_DONE);
+            ButtonType cancelType = new ButtonType("忽略", ButtonBar.ButtonData.CANCEL_CLOSE);
+            alert.getButtonTypes().setAll(confirmType, cancelType);
+
+            Optional<ButtonType> result = alert.showAndWait();
+            if (result.isPresent() && result.get() == confirmType) {
+                servicePanel.stopAllActiveServices();
+                connectPanel.disconnect();
+                refresh();
+            } else {
+                heartbeatAlerted.set(!connectPanel.isConnected());
+            }
+        });
     }
 
     public void refreshListener(CommandEvent event) {
+        // 新连接会话成功后：允许再次提示心跳失败
+        if (event instanceof CommandEvent.Success && event.command() == KtCommand.CONNECT) {
+            heartbeatAlerted.set(false);
+        }
         if (event.command().equals(KtCommand.MESH) || event.command().equals(KtCommand.CONNECT) || event.command().equals(KtCommand.RECOVER)) {
             refresh();
         }
@@ -164,7 +224,7 @@ public class HomePanel implements MenuPanel {
         updateButtonStates();
     }
 
-    /** 逻辑计算"一键启动/全部关闭"的可用状态 */
+    /** 逻辑计算"一键启动/全部终止"的可用状态 */
     private void updateButtonStates() {
         boolean hasService = !store.list().isEmpty();
         boolean connected = connectPanel.isConnected();
@@ -177,22 +237,9 @@ public class HomePanel implements MenuPanel {
                 && (!connected || !anyMeshOk);
         oneClickStartBtn.setDisable(!canStart);
 
-        // 全部关闭：存在任何活动（已连接/连接中/服务运行中/mesh 成功）
+        // 全部终止：存在任何活动（已连接/连接中/服务运行中/mesh 成功）
         boolean anyActive = connected || connecting || anyServiceRunning || anyMeshOk;
         closeAllBtn.setDisable(!anyActive);
-    }
-
-    /** 帮助图标：圆圈 + 问号（Material help 风格） */
-    private static Node createHelpIcon() {
-        SVGPath icon = new SVGPath();
-        icon.setContent("M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"
-                + "m1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5"
-                + "c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2"
-                + "s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z");
-        icon.setFill(Color.web("#666666"));
-        icon.setScaleX(0.5);
-        icon.setScaleY(0.5);
-        return icon;
     }
 
     /** 主页帮助弹框：说明各按钮/状态区/服务列表的用法 */
@@ -209,7 +256,7 @@ public class HomePanel implements MenuPanel {
             alert.setContentText("""
                     【主页】
                         【一键启动】自动建立数据代理通道和连接第一个服务（名称前带 (*) 标记）。
-                        【全部关闭】终止所有正在运行的服务命令，并断开数据代理通道。
+                        【全部终止】终止所有正在运行的服务命令，并断开数据代理通道。
                     
                     【配置】
                     查看当前工具已生效的配置

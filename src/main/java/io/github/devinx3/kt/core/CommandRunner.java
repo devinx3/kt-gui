@@ -80,6 +80,8 @@ public class CommandRunner {
                             if (isError) {
                                 handle.errLines.add(line);
                             }
+                            // 输出事件：订阅者按需检测（如心跳失败）
+                            bus.publish(new CommandEvent.Output(this, cmd, line, isError));
                         },
                         cmd.getSuccessKeyword() != null ? (line) -> {
                             // 成功关键字命中
@@ -153,6 +155,8 @@ public class CommandRunner {
                             } else {
                                 handle.errLines.add(line);
                             }
+                            // 输出事件：订阅者按需检测
+                            bus.publish(new CommandEvent.Output(this, cmd, line, isError));
                         },
                         null
                 );
