@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-    <assemblyIdentity version="0.3.1.0" processorArchitecture="X86" name="kt-gui.exe" type="win32"/>
+    <assemblyIdentity version="0.3.2.0" processorArchitecture="X86" name="kt-gui.exe" type="win32"/>
     <description>KT GUI for Windows</description>
     <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
         <security>
